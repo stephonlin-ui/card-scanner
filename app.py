@@ -55,51 +55,58 @@ def save_to_csv(data_dict):
     df.to_csv(CSV_FILE, index=False, encoding="utf-8-sig")
     return True
 
-# --- AI 辨識函式 (完全鎖定版) ---
+# --- AI 辨識函式 (多重備援版) ---
 def extract_info(image):
-    # 這裡直接寫死，不讓它自己亂找
-    target_model = "gemini-1.5-flash"
+    # 這是我們的候選名單，優先用最穩定的 -001 或 -002 版本
+    # 這些是 "全名"，比較不會被誤判
+    candidate_models = [
+        "gemini-1.5-flash-001",  # 首選：最穩定舊版
+        "gemini-1.5-flash-002",  # 次選：新穩定版
+        "gemini-1.5-flash",      # 簡稱
+        "gemini-1.5-pro",        # 慢但準
+        "models/gemini-1.5-flash-001" # 強制加上路徑前綴
+    ]
     
-    try:
-        model = genai.GenerativeModel(target_model)
-        
-        prompt = """
-        你是一個名片辨識專家。請分析這張名片圖片，並擷取以下資訊，輸出成純 JSON 格式：
-        {
-            "name": "姓名",
-            "title": "職稱",
-            "company": "公司名稱",
-            "phone": "電話號碼(優先抓取手機)",
-            "email": "Email",
-            "address": "地址"
-        }
-        如果某個欄位找不到，請留空字串。不要輸出 JSON 以外的任何文字。
-        """
-        response = model.generate_content([prompt, image])
-        text = response.text.strip()
-        
-        if text.startswith("```json"):
-            text = text[7:-3]
-        elif text.startswith("```"):
-            text = text[3:-3]
+    last_error = ""
+
+    for model_name in candidate_models:
+        try:
+            model = genai.GenerativeModel(model_name)
             
-        return json.loads(text)
-        
-    except Exception as e:
-        error_msg = str(e)
-        st.error(f"模型 ({target_model}) 發生錯誤: {error_msg}")
-        # 如果 1.5-flash 也失敗，我們才嘗試備案
-        if "404" in error_msg or "not found" in error_msg:
-             st.warning("嘗試切換至 legacy 模型...")
-             try:
-                 fallback_model = genai.GenerativeModel("gemini-1.5-flash-001")
-                 response = fallback_model.generate_content([prompt, image])
-                 text = response.text.strip()
-                 if text.startswith("```json"): text = text[7:-3]
-                 return json.loads(text)
-             except:
-                 return None
-        return None
+            prompt = """
+            你是一個名片辨識專家。請分析這張名片圖片，並擷取以下資訊，輸出成純 JSON 格式：
+            {
+                "name": "姓名",
+                "title": "職稱",
+                "company": "公司名稱",
+                "phone": "電話號碼(優先抓取手機)",
+                "email": "Email",
+                "address": "地址"
+            }
+            如果某個欄位找不到，請留空字串。不要輸出 JSON 以外的任何文字。
+            """
+            
+            # 嘗試發送請求
+            response = model.generate_content([prompt, image])
+            text = response.text.strip()
+            
+            if text.startswith("```json"):
+                text = text[7:-3]
+            elif text.startswith("```"):
+                text = text[3:-3]
+                
+            return json.loads(text) # 成功就回傳
+            
+        except Exception as e:
+            last_error = str(e)
+            # 如果是 429 (速度太快)，我們就休息一下再試下一個，但不放棄
+            if "429" in last_error:
+                time.sleep(2)
+            continue # 失敗了，換下一個名字試試看
+
+    # 如果所有名字都試過了還是失敗
+    st.error(f"所有模型嘗試皆失敗。最後錯誤: {last_error}")
+    return None
 
 # --- 管理員後台 ---
 with st.sidebar:
@@ -110,13 +117,19 @@ with st.sidebar:
             with open(CSV_FILE, "rb") as f:
                 st.download_button("📥 下載名片資料", f, "visitors_data.csv", "text/csv")
             st.dataframe(pd.read_csv(CSV_FILE))
+        
+        # 除錯按鈕：顯示真正可用的模型
+        if st.button("列出可用模型 (Debug)"):
+            try:
+                models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                st.write(models)
+            except Exception as e:
+                st.error(f"無法取得清單: {e}")
 
 # --- 主畫面 ---
 st.title("📇 歡迎參觀！")
 st.write("請拍攝名片，系統將自動為您建檔。")
-
-# 這裡顯示目前使用的版本，讓您確定更新成功沒
-st.caption("System v3.0 (Fixed Model: 1.5-flash)") 
+st.caption("System v4.0 (Multi-Try Mode)") 
 
 img_file = st.camera_input("點擊下方按鈕拍照", label_visibility="hidden")
 
@@ -130,6 +143,4 @@ if img_file:
             save_to_csv(info)
             st.balloons()
             st.success("✅ 建檔成功！")
-            st.write("畫面將在 3 秒後自動重置...")
-            time.sleep(3)
-            st.rerun()
+            st.write("畫面將在 3 秒
