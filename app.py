@@ -143,4 +143,6 @@ if img_file:
             save_to_csv(info)
             st.balloons()
             st.success("✅ 建檔成功！")
-            st.write("畫面將在 3 秒
+            st.write("畫面將在 3 秒後自動重置...")
+            time.sleep(3)
+            st.rerun()
