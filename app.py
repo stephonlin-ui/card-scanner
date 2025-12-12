@@ -2,12 +2,14 @@ import streamlit as st
 import google.generativeai as genai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 from PIL import Image
 import json
 import time
 
 # --- 設定頁面 ---
-st.set_page_config(page_title="雲端名片系統 (防重複版)", page_icon="🛡️")
+st.set_page_config(page_title="雲端名片系統 (存證版)", page_icon="📸")
 hide_streamlit_style = """
             <style>
             #MainMenu {visibility: hidden;}
@@ -17,8 +19,7 @@ hide_streamlit_style = """
             """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# --- 關鍵修正：初始化相機的 Key ---
-# 我們利用這個 Key 來強制重置相機元件，防止無限迴圈
+# --- 初始化相機 Key ---
 if 'camera_key' not in st.session_state:
     st.session_state.camera_key = 0
 
@@ -31,8 +32,42 @@ try:
 except Exception as e:
     st.error(f"⚠️ API Key 設定錯誤: {e}")
 
-# --- 2. 設定 Google Sheets 連線 ---
-def save_to_google_sheets(data_dict):
+# --- 2. 上傳圖片到 Google Drive ---
+def upload_image_to_drive(image_file, file_name, creds):
+    try:
+        # 建立 Drive 服務
+        service = build('drive', 'v3', credentials=creds)
+        
+        # 設定檔案元數據
+        file_metadata = {
+            'name': file_name,
+            'mimeType': 'image/jpeg'
+        }
+        
+        # 準備上傳 (重置檔案指標)
+        image_file.seek(0)
+        media = MediaIoBaseUpload(image_file, mimetype='image/jpeg', resumable=True)
+        
+        # 執行上傳
+        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+        file_id = file.get('id')
+        web_view_link = file.get('webViewLink')
+        
+        # --- 關鍵：設定權限為「知道連結者可檢視」 ---
+        # 這樣您在試算表中點擊連結時，才不會出現「存取被拒」
+        permission = {
+            'type': 'anyone',
+            'role': 'reader',
+        }
+        service.permissions().create(fileId=file_id, body=permission).execute()
+        
+        return web_view_link
+    except Exception as e:
+        st.error(f"圖片上傳失敗: {e}")
+        return "上傳失敗"
+
+# --- 3. 設定 Google Sheets 連線與寫入 ---
+def save_to_google_sheets(data_dict, image_file):
     try:
         if "gcp_service_account" not in st.secrets:
             st.warning("⚠️ 尚未設定 Google Cloud 機器人鑰匙")
@@ -47,6 +82,14 @@ def save_to_google_sheets(data_dict):
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         
+        # --- 先處理圖片上傳 ---
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        file_name = f"Card_{data_dict.get('name')}_{timestamp}.jpg"
+        
+        with st.spinner('📸 正在備份原始照片到雲端...'):
+            image_link = upload_image_to_drive(image_file, file_name, creds)
+
+        # --- 再處理試算表寫入 ---
         try:
             sheet = client.open("Business_Cards_Data").sheet1
         except:
@@ -54,12 +97,12 @@ def save_to_google_sheets(data_dict):
                 sh = client.create("Business_Cards_Data")
                 sh.share(st.secrets["gcp_service_account"]["client_email"], perm_type='user', role='writer')
                 sheet = sh.sheet1
-                sheet.append_row(["拍攝時間", "姓名", "職稱", "公司", "電話", "Email", "地址"])
+                # 新增標題，包含照片連結
+                sheet.append_row(["拍攝時間", "姓名", "職稱", "公司", "電話", "Email", "地址", "原始照片連結"])
             except Exception as create_error:
                 st.error(f"無法開啟試算表: {create_error}")
                 return False
 
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         row = [
             timestamp,
             data_dict.get('name', ''),
@@ -67,7 +110,8 @@ def save_to_google_sheets(data_dict):
             data_dict.get('company', ''),
             data_dict.get('phone', ''),
             data_dict.get('email', ''),
-            data_dict.get('address', '')
+            data_dict.get('address', ''),
+            image_link  # 這是最後一欄：照片連結
         ]
         
         sheet.append_row(row)
@@ -76,7 +120,7 @@ def save_to_google_sheets(data_dict):
         st.error(f"寫入失敗: {e}")
         return False
 
-# --- 3. AI 辨識邏輯 ---
+# --- 4. AI 辨識邏輯 ---
 def extract_info(image):
     target_model = "models/gemini-2.5-flash"
     try:
@@ -99,7 +143,6 @@ def extract_info(image):
         elif text.startswith("```"): text = text[3:-3]
         return json.loads(text)
     except Exception as e:
-        # 自動備援機制
         try:
              fallback = genai.GenerativeModel("models/gemini-2.0-flash-lite")
              response = fallback.generate_content([prompt, image])
@@ -110,35 +153,30 @@ def extract_info(image):
              return None
 
 # --- 主畫面 ---
-st.title("🛡️ 雲端名片系統")
-st.write("已啟用防重複發送機制")
-st.caption("System v11.0 (No-Loop Fix)")
+st.title("📸 雲端名片系統")
+st.write("自動辨識 + 原始圖檔備份")
+st.caption("System v12.0 (Image Upload Support)")
 
-# 關鍵：給 camera_input 一個變動的 key
-# 當 key 改變時，相機元件會被「銷毀並重建」，藉此清除裡面的照片
 img_file = st.camera_input("點擊下方按鈕拍照", label_visibility="hidden", key=f"camera_{st.session_state.camera_key}")
 
 if img_file:
-    with st.spinner('🚀 處理中...'):
-        image = Image.open(img_file)
+    # 讀取圖片給 AI 用
+    image = Image.open(img_file)
+    
+    with st.spinner('🚀 AI 辨識中...'):
         info = extract_info(image)
         
         if info:
-            st.info("正在上傳...")
-            success = save_to_google_sheets(info)
+            st.info(f"辨識成功：{info.get('name')}，正在上傳照片與資料...")
+            
+            # 將原始檔案傳入，以便上傳
+            success = save_to_google_sheets(info, img_file)
             
             if success:
                 st.balloons()
-                st.success(f"✅ 成功寫入：{info.get('name')}")
-                
-                # --- 關鍵修正：這裡做兩件事 ---
-                # 1. 更改 Key 的值，確保下次重啟時相機是乾淨的
+                st.success(f"✅ 資料與照片已存檔！")
                 st.session_state.camera_key += 1
-                
-                # 2. 等待 2 秒讓用戶看清楚
                 time.sleep(2)
-                
-                # 3. 重新整理頁面 (這時因為 Key 變了，相機內容會被清空)
                 st.rerun()
             else:
                 st.error("寫入失敗，請重試")
