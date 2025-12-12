@@ -9,7 +9,7 @@ import os
 # --- 設定頁面 ---
 st.set_page_config(page_title="展覽名片小幫手", page_icon="📇")
 
-# --- 隱藏 Streamlit 預設介面 ---
+# --- 隱藏 Streamlit 介面 ---
 hide_streamlit_style = """
             <style>
             #MainMenu {visibility: hidden;}
@@ -19,11 +19,13 @@ hide_streamlit_style = """
             """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# --- 讀取 API Key ---
+# --- 1. 設定與讀取 API Key (新增防呆機制) ---
 try:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-except:
-    st.warning("⚠️ 請先在 Streamlit 後台設定 GEMINI_API_KEY")
+    # 這裡加了 .strip()，如果您複製時不小心多複製了空白鍵，程式會自動刪掉
+    api_key = st.secrets["GEMINI_API_KEY"].strip()
+    genai.configure(api_key=api_key)
+except Exception as e:
+    st.error(f"⚠️ API Key 設定有誤，請檢查 Secrets 設定。錯誤訊息: {e}")
 
 # --- CSV 檔案路徑 ---
 CSV_FILE = "business_cards.csv"
@@ -34,8 +36,12 @@ def save_to_csv(data_dict):
         df = pd.DataFrame(columns=["姓名", "職稱", "公司", "電話", "Email", "地址"])
         df.to_csv(CSV_FILE, index=False, encoding="utf-8-sig")
     
-    df = pd.read_csv(CSV_FILE)
-    
+    try:
+        df = pd.read_csv(CSV_FILE)
+    except:
+        # 如果檔案壞掉，重新建立
+        df = pd.DataFrame(columns=["姓名", "職稱", "公司", "電話", "Email", "地址"])
+
     new_row = {
         "姓名": data_dict.get('name', ''),
         "職稱": data_dict.get('title', ''),
@@ -50,29 +56,37 @@ def save_to_csv(data_dict):
     df.to_csv(CSV_FILE, index=False, encoding="utf-8-sig")
     return True
 
-# --- AI 辨識函式 (修正模型名稱) ---
+# --- AI 辨識函式 (改回標準模型名稱) ---
 def extract_info(image):
-    # 這裡改成了 gemini-1.5-flash-latest 以確保找到最新模型
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
-    prompt = """
-    你是一個名片辨識專家。請分析這張名片圖片，並擷取以下資訊，輸出成純 JSON 格式：
-    {
-        "name": "姓名",
-        "title": "職稱",
-        "company": "公司名稱",
-        "phone": "電話號碼(優先抓取手機)",
-        "email": "Email",
-        "address": "地址"
-    }
-    如果某個欄位找不到，請留空字串。不要輸出 JSON 以外的任何文字。
-    """
-    response = model.generate_content([prompt, image])
     try:
+        # 使用最穩定的標準名稱
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = """
+        你是一個名片辨識專家。請分析這張名片圖片，並擷取以下資訊，輸出成純 JSON 格式：
+        {
+            "name": "姓名",
+            "title": "職稱",
+            "company": "公司名稱",
+            "phone": "電話號碼(優先抓取手機)",
+            "email": "Email",
+            "address": "地址"
+        }
+        如果某個欄位找不到，請留空字串。不要輸出 JSON 以外的任何文字。
+        """
+        response = model.generate_content([prompt, image])
         text = response.text.strip()
+        
+        # 清理 JSON 格式
         if text.startswith("```json"):
             text = text[7:-3]
+        elif text.startswith("```"):
+            text = text[3:-3]
+            
         return json.loads(text)
-    except:
+    except Exception as e:
+        # 如果出錯，印出錯誤到畫面上方便除錯
+        st.error(f"辨識失敗: {e}")
         return None
 
 # --- 管理員後台 ---
@@ -83,15 +97,12 @@ with st.sidebar:
         if os.path.exists(CSV_FILE):
             with open(CSV_FILE, "rb") as f:
                 st.download_button(
-                    label="📥 下載名片資料 (Excel/CSV)",
+                    label="📥 下載名片資料",
                     data=f,
                     file_name="visitors_data.csv",
                     mime="text/csv"
                 )
-            st.write("目前資料預覽：")
             st.dataframe(pd.read_csv(CSV_FILE))
-        else:
-            st.write("尚無資料")
 
 # --- 主畫面 ---
 st.title("📇 歡迎參觀！")
@@ -112,5 +123,3 @@ if img_file:
             st.write("畫面將在 3 秒後自動重置...")
             time.sleep(3)
             st.rerun()
-        else:
-            st.error("無法辨識，請再試一次。")
