@@ -55,50 +55,63 @@ def save_to_csv(data_dict):
     df.to_csv(CSV_FILE, index=False, encoding="utf-8-sig")
     return True
 
-# --- AI 辨識函式 (指定 2.0 Lite 版本) ---
+# --- AI 辨識函式 (智慧輪詢版) ---
 def extract_info(image):
-    # 根據您的清單，這是最適合展覽快速連拍的模型
-    target_model = "models/gemini-2.0-flash-lite"
+    # 這是我們的生存名單，依照「成功率」與「額度」排序
+    priority_models = [
+        "models/gemini-2.0-flash-exp",   # 實驗版：通常免費額度最敢給
+        "models/gemini-flash-latest",    # 通用版：系統自動指派
+        "models/gemini-2.5-flash",       # 保底版：雖然只有5次，但確定存在
+        "models/gemini-exp-1206"         # 備用實驗版
+    ]
     
-    try:
-        model = genai.GenerativeModel(target_model)
-        
-        prompt = """
-        你是一個名片辨識專家。請分析這張名片圖片，並擷取以下資訊，輸出成純 JSON 格式：
-        {
-            "name": "姓名",
-            "title": "職稱",
-            "company": "公司名稱",
-            "phone": "電話號碼(優先抓取手機)",
-            "email": "Email",
-            "address": "地址"
-        }
-        如果某個欄位找不到，請留空字串。不要輸出 JSON 以外的任何文字。
-        """
-        response = model.generate_content([prompt, image])
-        text = response.text.strip()
-        
-        if text.startswith("```json"):
-            text = text[7:-3]
-        elif text.startswith("```"):
-            text = text[3:-3]
+    prompt = """
+    你是一個名片辨識專家。請分析這張名片圖片，並擷取以下資訊，輸出成純 JSON 格式：
+    {
+        "name": "姓名",
+        "title": "職稱",
+        "company": "公司名稱",
+        "phone": "電話號碼(優先抓取手機)",
+        "email": "Email",
+        "address": "地址"
+    }
+    如果某個欄位找不到，請留空字串。不要輸出 JSON 以外的任何文字。
+    """
+
+    last_error = ""
+
+    # 開始輪詢，直到成功
+    for model_name in priority_models:
+        try:
+            # st.toast(f"嘗試模型: {model_name}...") # (測試用)
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content([prompt, image])
+            text = response.text.strip()
             
-        return json.loads(text)
-        
-    except Exception as e:
-        st.error(f"辨識錯誤 ({target_model}): {e}")
-        # 如果 Lite 版也失敗，嘗試通用別名
-        if "404" in str(e):
-             try:
-                 st.warning("嘗試切換至通用 Lite 版本...")
-                 fallback = genai.GenerativeModel("models/gemini-flash-lite-latest")
-                 response = fallback.generate_content([prompt, image])
-                 text = response.text.strip()
-                 if text.startswith("```json"): text = text[7:-3]
-                 return json.loads(text)
-             except:
-                 return None
-        return None
+            if text.startswith("```json"):
+                text = text[7:-3]
+            elif text.startswith("```"):
+                text = text[3:-3]
+                
+            return json.loads(text) # 成功！直接回傳，結束迴圈
+            
+        except Exception as e:
+            error_msg = str(e)
+            last_error = error_msg
+            
+            # 如果是 Limit 0 (不能用) 或 404 (找不到)，就直接試下一個，不浪費時間
+            if "limit: 0" in error_msg or "404" in error_msg:
+                continue
+            
+            # 如果是 429 (速度太快)，稍微停一下再試下一個
+            if "429" in error_msg:
+                time.sleep(1)
+                continue
+                
+    # 迴圈跑完還是沒人救得了
+    st.error(f"很抱歉，所有可用模型都忙碌中或額度已滿。最後錯誤: {last_error}")
+    st.warning("建議：請稍等 1 分鐘後再試，或更換 Google 帳號申請新的 API Key。")
+    return None
 
 # --- 管理員後台 ---
 with st.sidebar:
@@ -113,7 +126,7 @@ with st.sidebar:
 # --- 主畫面 ---
 st.title("📇 歡迎參觀！")
 st.write("請拍攝名片，系統將自動為您建檔。")
-st.caption("System v5.0 (Model: 2.0-Flash-Lite)") 
+st.caption("System v6.0 (Auto-Fallback Mode)") 
 
 img_file = st.camera_input("點擊下方按鈕拍照", label_visibility="hidden")
 
