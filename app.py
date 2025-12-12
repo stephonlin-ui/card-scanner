@@ -50,9 +50,10 @@ def save_to_csv(data_dict):
     df.to_csv(CSV_FILE, index=False, encoding="utf-8-sig")
     return True
 
-# --- AI 辨識函式 ---
+# --- AI 辨識函式 (修正模型名稱) ---
 def extract_info(image):
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # 這裡改成了 gemini-1.5-flash-latest 以確保找到最新模型
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
     prompt = """
     你是一個名片辨識專家。請分析這張名片圖片，並擷取以下資訊，輸出成純 JSON 格式：
     {
