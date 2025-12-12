@@ -7,9 +7,10 @@ from googleapiclient.http import MediaIoBaseUpload
 from PIL import Image
 import json
 import time
+from io import BytesIO # 新增這個工具
 
 # --- 設定頁面 ---
-st.set_page_config(page_title="雲端名片系統 (Google Drive版)", page_icon="📂")
+st.set_page_config(page_title="雲端名片系統 (穩定上傳版)", page_icon="💾")
 hide_streamlit_style = """
             <style>
             #MainMenu {visibility: hidden;}
@@ -19,7 +20,6 @@ hide_streamlit_style = """
             """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# 初始化相機 Key (防重複)
 if 'camera_key' not in st.session_state:
     st.session_state.camera_key = 0
 
@@ -46,52 +46,52 @@ def get_creds():
     ]
     return Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 
-# --- 2. 上傳圖片到 Google Drive (指定資料夾) ---
-def upload_image_to_drive(image_file, file_name):
+# --- 2. 上傳圖片到 Google Drive ---
+def upload_image_to_drive(image_bytes, file_name):
     try:
         creds = get_creds()
-        if not creds: return "無憑證"
+        if not creds: return "錯誤：無憑證"
 
-        # 檢查是否有設定資料夾 ID
         if "DRIVE_FOLDER_ID" not in st.secrets:
-            return "錯誤：未設定 DRIVE_FOLDER_ID (請在 Secrets 新增)"
+            return "錯誤：未設定 DRIVE_FOLDER_ID"
         
         folder_id = st.secrets["DRIVE_FOLDER_ID"]
+        # 顯示除錯訊息 (確認 ID 是否正確)
+        # st.toast(f"正在上傳至資料夾: {folder_id[:5]}...") 
+
         service = build('drive', 'v3', credentials=creds)
         
-        # 設定檔案元數據 (關鍵：parents 指定資料夾ID，解決空間不足問題)
         file_metadata = {
             'name': file_name,
             'mimeType': 'image/jpeg',
-            'parents': [folder_id] 
+            'parents': [folder_id]
         }
         
-        # 準備上傳
-        image_file.seek(0)
-        media = MediaIoBaseUpload(image_file, mimetype='image/jpeg', resumable=True)
+        # 關鍵修正：使用 BytesIO 重新包裝純資料
+        # 這樣就像是拿一個全新的檔案去上傳，不受之前讀取影響
+        media_stream = BytesIO(image_bytes)
+        media = MediaIoBaseUpload(media_stream, mimetype='image/jpeg', resumable=True)
         
-        # 執行上傳
         file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
         file_id = file.get('id')
         link = file.get('webViewLink')
         
-        # 設定權限為「知道連結者可檢視」(避免點連結看圖片時需要登入機器人)
+        # 開放權限
         try:
             service.permissions().create(
                 fileId=file_id, 
                 body={'type': 'anyone', 'role': 'reader'}
             ).execute()
         except:
-            pass 
+            pass
             
         return link
 
     except Exception as e:
-        # 如果還是失敗，回傳詳細錯誤
         return f"上傳失敗: {str(e)}"
 
 # --- 3. 寫入 Google Sheets ---
-def save_to_google_sheets(data_dict, image_file):
+def save_to_google_sheets(data_dict, image_bytes):
     try:
         creds = get_creds()
         if not creds:
@@ -100,15 +100,19 @@ def save_to_google_sheets(data_dict, image_file):
 
         client = gspread.authorize(creds)
         
-        # 上傳圖片
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         file_name = f"Card_{data_dict.get('name')}_{timestamp}.jpg"
         
-        image_link = "上傳中..."
-        with st.spinner('📂 正在備份照片到 Google Drive...'):
-            image_link = upload_image_to_drive(image_file, file_name)
-            if "上傳失敗" in image_link:
-                st.error(image_link) # 顯示錯誤但不中斷流程
+        # 先執行上傳
+        image_link = ""
+        with st.spinner('💾 正在將照片存入 Google Drive...'):
+            image_link = upload_image_to_drive(image_bytes, file_name)
+            
+            # 如果上傳失敗，立刻停止並報錯
+            if "錯誤" in image_link or "失敗" in image_link:
+                st.error(f"❌ 照片存檔失敗，流程終止。原因: {image_link}")
+                st.info("💡 請檢查 Secrets 中的 DRIVE_FOLDER_ID 是否正確，且已共用給機器人。")
+                return False
 
         # 寫入 Sheet
         try:
@@ -148,7 +152,6 @@ def extract_info(image):
         return json.loads(text)
     except:
         try:
-             # 備援
              fallback = genai.GenerativeModel("models/gemini-2.0-flash-lite")
              response = fallback.generate_content([prompt, image])
              text = response.text.strip()
@@ -158,19 +161,25 @@ def extract_info(image):
              return None
 
 # --- 主畫面 ---
-st.title("📂 雲端名片系統 (Drive版)")
-st.caption("System v15.0 (Folder Fixed)")
+st.title("📂 雲端名片系統")
+st.caption("System v16.0 (Buffer Fix)")
 
-# 使用 key 機制防止重複上傳
 img_file = st.camera_input("拍照", label_visibility="hidden", key=f"camera_{st.session_state.camera_key}")
 
 if img_file:
+    # --- 關鍵修正：先備份一份純資料 (Bytes) ---
+    # 這樣 img_bytes 專門給上傳用，img_file 專門給 AI 用
+    img_bytes = img_file.getvalue() 
     image = Image.open(img_file)
+    
     with st.spinner('🚀 處理中...'):
         info = extract_info(image)
         if info:
             st.info(f"辨識成功：{info.get('name')}")
-            success = save_to_google_sheets(info, img_file)
+            
+            # 傳入備份的 bytes 資料
+            success = save_to_google_sheets(info, img_bytes)
+            
             if success:
                 st.balloons()
                 st.success("✅ 建檔完成！")
