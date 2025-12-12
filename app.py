@@ -52,10 +52,10 @@ def upload_image_to_drive(image_bytes, file_name):
         creds = get_creds()
         if not creds: return "錯誤：無憑證"
 
-        if "DRIVE_FOLDER_ID" not in st.secrets:
+        if "DRIVE_FOLDERS_ID" not in st.secrets:
             return "錯誤：未設定 DRIVE_FOLDER_ID"
         
-        folder_id = st.secrets["DRIVE_FOLDER_ID"]
+        folderS_id = st.secrets["DRIVE_FOLDERS_ID"]
         # 顯示除錯訊息 (確認 ID 是否正確)
         # st.toast(f"正在上傳至資料夾: {folder_id[:5]}...") 
 
