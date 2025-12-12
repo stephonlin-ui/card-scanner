@@ -23,7 +23,7 @@ try:
         api_key = st.secrets["GEMINI_API_KEY"].strip()
         genai.configure(api_key=api_key)
     else:
-        st.warning("⚠️ 尚未設定 API Key，請至 Secrets 設定")
+        st.warning("⚠️ 尚未設定 API Key")
 except Exception as e:
     st.error(f"⚠️ API Key 設定錯誤: {e}")
 
@@ -55,45 +55,13 @@ def save_to_csv(data_dict):
     df.to_csv(CSV_FILE, index=False, encoding="utf-8-sig")
     return True
 
-# --- 自動尋找可用模型函式 ---
-def find_valid_model():
-    try:
-        # 列出所有支援 generateContent 的模型
-        valid_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                valid_models.append(m.name)
-        
-        # 1. 優先找 Flash 版本 (快且免費)
-        for m in valid_models:
-            if "flash" in m and "1.5" in m:
-                return m
-        
-        # 2. 其次找 Pro 版本
-        for m in valid_models:
-            if "pro" in m and "1.5" in m:
-                return m
-                
-        # 3. 如果都沒有，回傳第一個抓到的
-        if valid_models:
-            return valid_models[0]
-            
-        return None
-    except Exception as e:
-        # 如果連 list_models 都失敗，通常是 Key 有問題
-        return None
-
-# --- AI 辨識函式 ---
+# --- AI 辨識函式 (完全鎖定版) ---
 def extract_info(image):
-    # 自動抓取模型名稱
-    model_name = find_valid_model()
+    # 這裡直接寫死，不讓它自己亂找
+    target_model = "gemini-1.5-flash"
     
-    # 如果抓不到模型，強迫使用一個預設值試試看
-    if not model_name:
-        model_name = "models/gemini-1.5-flash"
-        
     try:
-        model = genai.GenerativeModel(model_name)
+        model = genai.GenerativeModel(target_model)
         
         prompt = """
         你是一個名片辨識專家。請分析這張名片圖片，並擷取以下資訊，輸出成純 JSON 格式：
@@ -116,11 +84,24 @@ def extract_info(image):
             text = text[3:-3]
             
         return json.loads(text)
+        
     except Exception as e:
-        st.error(f"辨識失敗 (使用模型: {model_name}): {e}")
+        error_msg = str(e)
+        st.error(f"模型 ({target_model}) 發生錯誤: {error_msg}")
+        # 如果 1.5-flash 也失敗，我們才嘗試備案
+        if "404" in error_msg or "not found" in error_msg:
+             st.warning("嘗試切換至 legacy 模型...")
+             try:
+                 fallback_model = genai.GenerativeModel("gemini-1.5-flash-001")
+                 response = fallback_model.generate_content([prompt, image])
+                 text = response.text.strip()
+                 if text.startswith("```json"): text = text[7:-3]
+                 return json.loads(text)
+             except:
+                 return None
         return None
 
-# --- 管理員後台 (側邊欄) ---
+# --- 管理員後台 ---
 with st.sidebar:
     st.header("管理員專區")
     pwd = st.text_input("密碼", type="password")
@@ -128,25 +109,18 @@ with st.sidebar:
         if os.path.exists(CSV_FILE):
             with open(CSV_FILE, "rb") as f:
                 st.download_button("📥 下載名片資料", f, "visitors_data.csv", "text/csv")
-            st.write("---")
-            st.write("資料預覽：")
             st.dataframe(pd.read_csv(CSV_FILE))
-        
-        if st.button("檢測模型連線"):
-            try:
-                models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                st.success(f"連線成功！可用模型: {models}")
-            except Exception as e:
-                st.error(f"連線失敗: {e}")
 
 # --- 主畫面 ---
 st.title("📇 歡迎參觀！")
 st.write("請拍攝名片，系統將自動為您建檔。")
 
+# 這裡顯示目前使用的版本，讓您確定更新成功沒
+st.caption("System v3.0 (Fixed Model: 1.5-flash)") 
+
 img_file = st.camera_input("點擊下方按鈕拍照", label_visibility="hidden")
 
 if img_file:
-    # 這裡就是剛才出錯的地方，請確保這行完整
     with st.spinner('🤖 正在讀取名片資料...'):
         image = Image.open(img_file)
         info = extract_info(image)
@@ -159,5 +133,3 @@ if img_file:
             st.write("畫面將在 3 秒後自動重置...")
             time.sleep(3)
             st.rerun()
-        else:
-            st.error("無法辨識，請再試一次。")
