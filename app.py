@@ -1,148 +1,44 @@
 import streamlit as st
 import google.generativeai as genai
-import pandas as pd
-from PIL import Image
-import json
-import time
 import os
 
-# --- 設定頁面 ---
-st.set_page_config(page_title="展覽名片小幫手", page_icon="📇")
-hide_streamlit_style = """
-            <style>
-            #MainMenu {visibility: hidden;}
-            footer {visibility: hidden;}
-            header {visibility: hidden;}
-            </style>
-            """
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+st.set_page_config(page_title="系統診斷", page_icon="🔧")
 
-# --- 讀取 API Key ---
+st.title("🔧 API 模型診斷工具")
+st.write("正在檢測您的 API Key 權限...")
+
+# 讀取 Key
 try:
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"].strip()
         genai.configure(api_key=api_key)
+        st.success("✅ API Key 讀取成功")
     else:
-        st.warning("⚠️ 尚未設定 API Key")
+        st.error("❌ 未設定 GEMINI_API_KEY")
+        st.stop()
 except Exception as e:
-    st.error(f"⚠️ API Key 設定錯誤: {e}")
+    st.error(f"❌ Key 設定錯誤: {e}")
+    st.stop()
 
-# --- CSV 檔案路徑 ---
-CSV_FILE = "business_cards.csv"
-
-# --- 儲存資料函式 ---
-def save_to_csv(data_dict):
-    if not os.path.exists(CSV_FILE):
-        df = pd.DataFrame(columns=["姓名", "職稱", "公司", "電話", "Email", "地址"])
-        df.to_csv(CSV_FILE, index=False, encoding="utf-8-sig")
+# 列出模型
+try:
+    st.write("---")
+    st.write("📡 正在向 Google 請求模型清單...")
     
-    try:
-        df = pd.read_csv(CSV_FILE)
-    except:
-        df = pd.DataFrame(columns=["姓名", "職稱", "公司", "電話", "Email", "地址"])
-
-    new_row = {
-        "姓名": data_dict.get('name', ''),
-        "職稱": data_dict.get('title', ''),
-        "公司": data_dict.get('company', ''),
-        "電話": data_dict.get('phone', ''),
-        "Email": data_dict.get('email', ''),
-        "地址": data_dict.get('address', '')
-    }
-    
-    new_df = pd.DataFrame([new_row])
-    df = pd.concat([df, new_df], ignore_index=True)
-    df.to_csv(CSV_FILE, index=False, encoding="utf-8-sig")
-    return True
-
-# --- AI 辨識函式 (多重備援版) ---
-def extract_info(image):
-    # 這是我們的候選名單，優先用最穩定的 -001 或 -002 版本
-    # 這些是 "全名"，比較不會被誤判
-    candidate_models = [
-        "gemini-1.5-flash-001",  # 首選：最穩定舊版
-        "gemini-1.5-flash-002",  # 次選：新穩定版
-        "gemini-1.5-flash",      # 簡稱
-        "gemini-1.5-pro",        # 慢但準
-        "models/gemini-1.5-flash-001" # 強制加上路徑前綴
-    ]
-    
-    last_error = ""
-
-    for model_name in candidate_models:
-        try:
-            model = genai.GenerativeModel(model_name)
+    available_models = []
+    for m in genai.list_models():
+        # 只列出可以生成文字的模型
+        if 'generateContent' in m.supported_generation_methods:
+            available_models.append(m.name)
             
-            prompt = """
-            你是一個名片辨識專家。請分析這張名片圖片，並擷取以下資訊，輸出成純 JSON 格式：
-            {
-                "name": "姓名",
-                "title": "職稱",
-                "company": "公司名稱",
-                "phone": "電話號碼(優先抓取手機)",
-                "email": "Email",
-                "address": "地址"
-            }
-            如果某個欄位找不到，請留空字串。不要輸出 JSON 以外的任何文字。
-            """
-            
-            # 嘗試發送請求
-            response = model.generate_content([prompt, image])
-            text = response.text.strip()
-            
-            if text.startswith("```json"):
-                text = text[7:-3]
-            elif text.startswith("```"):
-                text = text[3:-3]
-                
-            return json.loads(text) # 成功就回傳
-            
-        except Exception as e:
-            last_error = str(e)
-            # 如果是 429 (速度太快)，我們就休息一下再試下一個，但不放棄
-            if "429" in last_error:
-                time.sleep(2)
-            continue # 失敗了，換下一個名字試試看
-
-    # 如果所有名字都試過了還是失敗
-    st.error(f"所有模型嘗試皆失敗。最後錯誤: {last_error}")
-    return None
-
-# --- 管理員後台 ---
-with st.sidebar:
-    st.header("管理員專區")
-    pwd = st.text_input("密碼", type="password")
-    if pwd == "admin123":
-        if os.path.exists(CSV_FILE):
-            with open(CSV_FILE, "rb") as f:
-                st.download_button("📥 下載名片資料", f, "visitors_data.csv", "text/csv")
-            st.dataframe(pd.read_csv(CSV_FILE))
+    if available_models:
+        st.success(f"🎉 檢測成功！共找到 {len(available_models)} 個可用模型：")
+        # 直接顯示在畫面上，方便您複製或截圖
+        st.code(available_models)
+        st.write("請將上面括號內的內容複製或截圖給我。")
+    else:
+        st.warning("⚠️ 連線成功，但清單是空的（沒有可用模型）。")
         
-        # 除錯按鈕：顯示真正可用的模型
-        if st.button("列出可用模型 (Debug)"):
-            try:
-                models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                st.write(models)
-            except Exception as e:
-                st.error(f"無法取得清單: {e}")
-
-# --- 主畫面 ---
-st.title("📇 歡迎參觀！")
-st.write("請拍攝名片，系統將自動為您建檔。")
-st.caption("System v4.0 (Multi-Try Mode)") 
-
-img_file = st.camera_input("點擊下方按鈕拍照", label_visibility="hidden")
-
-if img_file:
-    with st.spinner('🤖 正在讀取名片資料...'):
-        image = Image.open(img_file)
-        info = extract_info(image)
-        
-        if info:
-            st.info(f"嗨，{info.get('name')}！資料儲存中...")
-            save_to_csv(info)
-            st.balloons()
-            st.success("✅ 建檔成功！")
-            st.write("畫面將在 3 秒後自動重置...")
-            time.sleep(3)
-            st.rerun()
+except Exception as e:
+    st.error(f"❌ 連線失敗: {e}")
+    st.write("可能原因：API Key 權限不足，或 library 版本過舊。")
