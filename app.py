@@ -10,7 +10,7 @@ import time
 from io import BytesIO
 
 # --- 設定頁面 ---
-st.set_page_config(page_title="雲端名片系統 (v17.0)", page_icon="🕵️")
+st.set_page_config(page_title="雲端名片系統 (v18.0)", page_icon="🕵️")
 hide_streamlit_style = """
             <style>
             #MainMenu {visibility: hidden;}
@@ -32,7 +32,7 @@ try:
 except Exception as e:
     st.error(f"⚠️ API Key 設定錯誤: {e}")
 
-# --- 2. 智慧型憑證與ID讀取 (v17.0 核心修正) ---
+# --- 2. 智慧型憑證與ID讀取 (v18.0 核心修正) ---
 def get_creds_and_folder():
     # 1. 先找憑證
     if "gcp_service_account" not in st.secrets:
@@ -48,17 +48,21 @@ def get_creds_and_folder():
     ]
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 
-    # 2. 再找 Folder ID (不管藏在哪裡都把它挖出來)
+    # 2. 再找 Folder ID (神探模式：不管藏在哪都挖出來)
     folder_id = None
     
-    # 情況 A: ID 在最外層
+    # 情況 A: ID 在最外層 (正確位置)
     if "DRIVE_FOLDER_ID" in st.secrets:
         folder_id = st.secrets["DRIVE_FOLDER_ID"]
         
-    # 情況 B: ID 不小心被貼在 gcp_service_account 裡面
+    # 情況 B: ID 不小心被貼在 gcp_service_account 裡面 (常見錯誤)
     elif "DRIVE_FOLDER_ID" in creds_dict:
         folder_id = creds_dict["DRIVE_FOLDER_ID"]
         
+    # 情況 C: 使用者可能用了小寫 keys
+    elif "drive_folder_id" in creds_dict:
+        folder_id = creds_dict["drive_folder_id"]
+
     return creds, folder_id
 
 # --- 3. 上傳圖片到 Google Drive ---
@@ -67,17 +71,17 @@ def upload_image_to_drive(image_bytes, file_name):
         creds, folder_id = get_creds_and_folder()
         
         if not creds: return "錯誤：無憑證"
-        if not folder_id: return "錯誤：找不到 DRIVE_FOLDER_ID (請檢查 Secrets)"
-
-        # --- 偵錯模式：讓您看到程式讀到了什麼 ---
-        # st.write(f"正在上傳到資料夾 ID: {folder_id}") 
+        
+        # 如果還是找不到 ID，直接報錯並顯示原因
+        if not folder_id: 
+            return "錯誤：程式找不到 DRIVE_FOLDER_ID，請確認 Secrets 設定。"
 
         service = build('drive', 'v3', credentials=creds)
         
         file_metadata = {
             'name': file_name,
             'mimeType': 'image/jpeg',
-            'parents': [folder_id] # 這行最重要，指定父母資料夾
+            'parents': [folder_id] # 這裡一定要有值，不然就會報空間不足錯
         }
         
         media_stream = BytesIO(image_bytes)
@@ -100,7 +104,8 @@ def upload_image_to_drive(image_bytes, file_name):
     except Exception as e:
         error_msg = str(e)
         if "Storage quota" in error_msg:
-             return f"空間錯誤: 機器人無法存取資料夾 ID ({folder_id})，請確認該資料夾已共用給機器人。"
+             # 這裡會把抓到的 ID 印出來，方便除錯
+             return f"空間錯誤: 雖然抓到了 ID ({folder_id})，但機器人無法寫入。請確認該資料夾已「共用」給機器人。"
         return f"上傳失敗: {error_msg}"
 
 # --- 4. 寫入 Google Sheets ---
@@ -117,9 +122,13 @@ def save_to_google_sheets(data_dict, image_bytes):
         file_name = f"Card_{data_dict.get('name')}_{timestamp}.jpg"
         
         image_link = ""
-        # 顯示目前的 ID 狀態，讓您安心
-        st.caption(f"ℹ️ 目標資料夾 ID: {folder_id if folder_id else '未偵測到'}")
         
+        # --- 顯示偵測到的 ID，讓您安心 ---
+        if folder_id:
+            st.caption(f"✅ 已鎖定目標資料夾 ID: {folder_id[:5]}... (偵測成功)")
+        else:
+            st.error("❌ 警告：未偵測到資料夾 ID，上傳將會失敗")
+
         with st.spinner('💾 正在備份照片...'):
             image_link = upload_image_to_drive(image_bytes, file_name)
             
@@ -174,7 +183,7 @@ def extract_info(image):
 
 # --- 主畫面 ---
 st.title("📂 雲端名片系統")
-st.caption("System v17.0 (ID Auto-Finder)")
+st.caption("System v18.0 (Auto-Fix ID)")
 
 img_file = st.camera_input("拍照", label_visibility="hidden", key=f"camera_{st.session_state.camera_key}")
 
