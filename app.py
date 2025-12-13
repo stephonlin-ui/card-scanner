@@ -17,11 +17,15 @@ import cv2
 import numpy as np
 
 # ==================================================
-# Android Chrome: camera-first UI (FULL FILE)
+# ✅ 建議 requirements.txt 加這行（Streamlit Cloud 最穩）
+# opencv-python-headless
+# ==================================================
+
+# ==================================================
+# Android Chrome: camera-first UI
 # ==================================================
 st.set_page_config(page_title="Card Scanner", page_icon="📇", layout="wide")
 
-# ---- CSS injected via components.html (prevents CSS showing as text) ----
 components.html(
     """
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
@@ -29,72 +33,17 @@ components.html(
 #MainMenu, footer, header {visibility:hidden;}
 html, body { height: 100%; background:#0E1117; }
 
-/* Remove Streamlit padding so camera can be near full screen */
-.block-container{
-  padding: 0 !important;
-  max-width: 100vw !important;
-}
-main > div{
-  padding-left: 0 !important;
-  padding-right: 0 !important;
-}
+.block-container{ padding: 0 !important; max-width: 100vw !important; }
+main > div{ padding-left: 0 !important; padding-right: 0 !important; }
 
-/* Prefer modern viewport units on mobile (Android Chrome supports svh/dvh) */
 :root{
   --yellow:#FFD400;
   --green:#00E676;
   --bg:#0E1117;
-  --top: 52px;
-  --bottom: 52px;
+  --top: 54px;
+  --bottom: 54px;
 }
 
-/* Top bar */
-.topbar{
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  background: rgba(14,17,23,0.80);
-  backdrop-filter: blur(10px);
-  padding: 8px 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  height: var(--top);
-  box-sizing: border-box;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-}
-.topbar .left{
-  display:flex;
-  flex-direction:column;
-  gap:2px;
-}
-.topbar .title{
-  font-size: 13px;
-  font-weight: 900;
-  color: #E9EEF6;
-  line-height: 1.05;
-}
-.topbar .sub{
-  font-size: 11px;
-  color: rgba(233,238,246,0.72);
-  line-height: 1.1;
-}
-.topbar .hint{
-  font-size: 11px;
-  color: rgba(233,238,246,0.60);
-  white-space: nowrap;
-}
-
-/* Camera shell: occupy remaining height */
-.camera-shell{
-  position: relative;
-  width: 100vw;
-  background: var(--bg);
-  overflow: hidden;
-}
-
-/* height: use svh/dvh fallback chain */
 @supports (height: 100dvh){
   .camera-shell{ height: calc(100dvh - var(--top) - var(--bottom)); }
 }
@@ -102,23 +51,39 @@ main > div{
   .camera-shell{ height: calc(100svh - var(--top) - var(--bottom)); }
 }
 
-/* Make Streamlit camera component fill width */
+.topbar{
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(14,17,23,0.80);
+  backdrop-filter: blur(10px);
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  height: var(--top);
+  box-sizing: border-box;
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+}
+.topbar .left{ display:flex; flex-direction:column; gap:2px; }
+.topbar .title{ font-size: 13px; font-weight: 900; color: #E9EEF6; line-height: 1.05; }
+.topbar .sub{ font-size: 11px; color: rgba(233,238,246,0.72); line-height: 1.1; }
+.topbar .hint{ font-size: 11px; color: rgba(233,238,246,0.60); white-space: nowrap; }
+
+.camera-shell{
+  position: relative;
+  width: 100vw;
+  background: var(--bg);
+  overflow: hidden;
+}
 .camera-shell [data-testid="stCameraInput"]{
   width: 100% !important;
   max-width: 100% !important;
   margin: 0 !important;
 }
-
-/* Ensure preview fills width */
-.camera-shell video,
-.camera-shell img,
-.camera-shell canvas{
+.camera-shell video, .camera-shell img, .camera-shell canvas{
   width: 100% !important;
   height: auto !important;
   border-radius: 0 !important;
 }
 
-/* Guide box */
+/* guide box */
 .guide{
   position:absolute;
   top: 18%;
@@ -153,12 +118,9 @@ main > div{
   line-height: 1.2;
 }
 
-/* Bottom thin status bar */
 .bottombar{
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  left: 0; right: 0; bottom: 0;
   z-index: 60;
   background: rgba(14,17,23,0.86);
   backdrop-filter: blur(10px);
@@ -166,8 +128,7 @@ main > div{
   border-top: 1px solid rgba(255,255,255,0.06);
   height: var(--bottom);
   box-sizing: border-box;
-  display:flex;
-  align-items:center;
+  display:flex; align-items:center;
 }
 .bottombar .msg{
   font-size: 11.5px;
@@ -175,12 +136,12 @@ main > div{
   line-height: 1.25;
 }
 
-/* Touch-friendly Streamlit buttons */
 div.stButton > button{
   border-radius: 14px !important;
   padding: 10px 12px !important;
   font-weight: 900 !important;
   font-size: 14px !important;
+  width: 100% !important;
 }
 </style>
     """,
@@ -197,8 +158,6 @@ if "frame_good" not in st.session_state:
     st.session_state.frame_good = False
 if "last_msg" not in st.session_state:
     st.session_state.last_msg = "請將名片填滿框線｜Fill the frame with the card"
-if "fs_trigger" not in st.session_state:
-    st.session_state.fs_trigger = 0
 
 # ==================================================
 # Gemini
@@ -243,9 +202,7 @@ def get_oauth_creds():
     params = st.experimental_get_query_params()
     if "code" in params:
         flow = Flow.from_client_config(
-            CLIENT_CONFIG,
-            scopes=SCOPES,
-            redirect_uri=st.secrets["google_oauth"]["redirect_uri"]
+            CLIENT_CONFIG, scopes=SCOPES, redirect_uri=st.secrets["google_oauth"]["redirect_uri"]
         )
         flow.fetch_token(code=params["code"][0])
         creds = flow.credentials
@@ -254,9 +211,7 @@ def get_oauth_creds():
         return creds
 
     flow = Flow.from_client_config(
-        CLIENT_CONFIG,
-        scopes=SCOPES,
-        redirect_uri=st.secrets["google_oauth"]["redirect_uri"]
+        CLIENT_CONFIG, scopes=SCOPES, redirect_uri=st.secrets["google_oauth"]["redirect_uri"]
     )
     auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
 
@@ -276,25 +231,19 @@ def get_oauth_creds():
     st.stop()
 
 # ==================================================
-# OpenCV warp helpers
+# OpenCV: detect & crop business card (NO AI CORNERS)
 # ==================================================
 def order_points(pts: np.ndarray) -> np.ndarray:
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]
-    rect[2] = pts[np.argmax(s)]
+    rect[0] = pts[np.argmin(s)]  # tl
+    rect[2] = pts[np.argmax(s)]  # br
     diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]
-    rect[3] = pts[np.argmax(diff)]
+    rect[1] = pts[np.argmin(diff)]  # tr
+    rect[3] = pts[np.argmax(diff)]  # bl
     return rect
 
-def clamp_point(p, w, h):
-    x = float(p[0]); y = float(p[1])
-    x = max(0.0, min(x, float(w - 1)))
-    y = max(0.0, min(y, float(h - 1)))
-    return [x, y]
-
-def four_point_transform_rgb(rgb: np.ndarray, pts4: np.ndarray) -> np.ndarray:
+def four_point_transform(rgb: np.ndarray, pts4: np.ndarray) -> np.ndarray:
     rect = order_points(pts4.astype("float32"))
     (tl, tr, br, bl) = rect
 
@@ -306,8 +255,8 @@ def four_point_transform_rgb(rgb: np.ndarray, pts4: np.ndarray) -> np.ndarray:
     heightB = np.linalg.norm(tl - bl)
     maxH = int(max(heightA, heightB))
 
-    maxW = max(maxW, 280)
-    maxH = max(maxH, 170)
+    maxW = max(maxW, 500)
+    maxH = max(maxH, 300)
 
     dst = np.array([
         [0, 0],
@@ -316,51 +265,126 @@ def four_point_transform_rgb(rgb: np.ndarray, pts4: np.ndarray) -> np.ndarray:
         [0, maxH - 1]
     ], dtype="float32")
 
-    M = cv2.getPerspectiveTransform(rect.astype("float32"), dst)
+    M = cv2.getPerspectiveTransform(rect, dst)
     warped = cv2.warpPerspective(rgb, M, (maxW, maxH))
     return warped
 
+def detect_card_quad(rgb: np.ndarray):
+    """
+    Return (quad_pts, debug_dict) or (None, debug_dict)
+    quad_pts shape: (4,2)
+    """
+    debug = {}
+    h, w = rgb.shape[:2]
+    debug["img_w"] = w
+    debug["img_h"] = h
+
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # Try Canny + morphology
+    edged = cv2.Canny(gray, 50, 150)
+    edged = cv2.dilate(edged, None, iterations=2)
+    edged = cv2.erode(edged, None, iterations=1)
+
+    cnts, _ = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:25]
+
+    best = None
+    best_area = 0
+
+    for c in cnts:
+        area = cv2.contourArea(c)
+        if area < (w * h) * 0.08:  # too small
+            continue
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+
+        if len(approx) == 4:
+            pts = approx.reshape(4, 2).astype("float32")
+            rect = order_points(pts)
+            # aspect check (business card usually ~1.4~2.0, allow wider)
+            ww = np.linalg.norm(rect[1] - rect[0])
+            hh = np.linalg.norm(rect[3] - rect[0])
+            if ww < 10 or hh < 10:
+                continue
+            asp = max(ww, hh) / max(1.0, min(ww, hh))
+            if 1.2 <= asp <= 2.6:
+                if area > best_area:
+                    best_area = area
+                    best = rect
+
+    debug["best_area"] = float(best_area)
+    debug["best_coverage"] = float(best_area / (w * h))
+
+    if best is None:
+        return None, debug
+    return best, debug
+
+def auto_crop_and_deskew(pil_img: Image.Image):
+    """
+    Returns (cropped_pil, ok, reason)
+    """
+    rgb = np.array(pil_img.convert("RGB"))
+    h, w = rgb.shape[:2]
+
+    quad, dbg = detect_card_quad(rgb)
+    if quad is None:
+        return pil_img, False, "找不到名片邊框｜No card border detected"
+
+    # Compute coverage by warped size approximation
+    ww = np.linalg.norm(quad[1] - quad[0])
+    hh = np.linalg.norm(quad[3] - quad[0])
+    coverage = (ww * hh) / (w * h)
+
+    # Strong safeguards
+    asp = max(ww, hh) / max(1.0, min(ww, hh))
+    if coverage < 0.18:
+        return pil_img, False, "名片太小，請靠近一點｜Card too small, move closer"
+    if asp < 1.2 or asp > 2.8:
+        return pil_img, False, "角度/框線不清楚，請調整｜Bad angle/edges unclear"
+
+    warped = four_point_transform(rgb, quad)
+
+    # Light enhance for OCR
+    warped_gray = cv2.cvtColor(warped, cv2.COLOR_RGB2GRAY)
+    warped_gray = cv2.bilateralFilter(warped_gray, 9, 75, 75)
+    warped_rgb = cv2.cvtColor(warped_gray, cv2.COLOR_GRAY2RGB)
+
+    return Image.fromarray(warped_rgb), True, "OK"
+
 # ==================================================
-# Gemini: corners + quality (PIXELS)
+# Gemini: only judge OK/NG + OCR (NO CORNERS)
 # ==================================================
-def gemini_find_card_corners_and_quality(pil_img: Image.Image):
+def gemini_quality_ok(pil_img: Image.Image):
     model = genai.GenerativeModel("models/gemini-2.0-flash")
     w, h = pil_img.size
     prompt = f"""
 Return JSON only.
 
-Image size: width={w}, height={h}
+You are checking if a BUSINESS CARD photo is readable enough for OCR.
+If readable: ok=true.
+If not: ok=false and give a short reason in Chinese + English.
 
-Decide if card is readable & well-framed.
-If OK: provide 4 corners in PIXEL coords.
-If not OK: ok=false, corners=null.
+Image size: {w}x{h}
 
 Format:
 {{
   "ok": true/false,
-  "reason": "",
-  "coverage": 0.0,
-  "corners": {{
-    "tl": [0,0],
-    "tr": [0,0],
-    "br": [0,0],
-    "bl": [0,0]
-  }} or null
+  "reason_zh": "",
+  "reason_en": ""
 }}
 """
     res = model.generate_content([prompt, pil_img])
     raw = (res.text or "").strip()
     m = re.search(r"\{[\s\S]*\}", raw)
     if not m:
-        return None, raw
+        return {"ok": False, "reason_zh": "AI 回傳格式錯誤", "reason_en": "Bad AI response"}, raw
     try:
         return json.loads(m.group()), raw
     except:
-        return None, m.group()
+        return {"ok": False, "reason_zh": "AI JSON 解析失敗", "reason_en": "JSON parse failed"}, m.group()
 
-# ==================================================
-# Gemini OCR
-# ==================================================
 def extract_info(card_image: Image.Image):
     model = genai.GenerativeModel("models/gemini-2.0-flash")
     prompt = """
@@ -427,65 +451,24 @@ def save_sheet(data: dict, link: str, creds: Credentials):
     ])
 
 # ==================================================
-# Fullscreen + (try) lock landscape (best-effort)
-# ==================================================
-def request_fullscreen_and_landscape():
-    st.session_state.fs_trigger += 1
-    components.html(
-        f"""
-<script>
-(async function() {{
-  try {{
-    const el = document.documentElement;
-    if (!document.fullscreenElement) {{
-      if (el.requestFullscreen) {{
-        await el.requestFullscreen();
-      }}
-    }}
-  }} catch(e) {{}}
-
-  // Try lock landscape (works only in some Android Chrome situations)
-  try {{
-    if (screen.orientation && screen.orientation.lock) {{
-      await screen.orientation.lock('landscape');
-    }}
-  }} catch(e) {{}}
-}})();
-</script>
-        """,
-        height=0,
-        width=0,
-    )
-
-# ==================================================
 # UI
 # ==================================================
 creds = get_oauth_creds()
 
-# Top bar with fullscreen button
 st.markdown(
     """
     <div class="topbar">
       <div class="left">
         <div class="title">📇 名片掃描｜Card Scanner</div>
-        <div class="sub">建議：點「全螢幕」再把手機橫放｜Tap Fullscreen then rotate</div>
+        <div class="sub">把名片放滿框線後拍照｜Fill the frame then capture</div>
       </div>
-      <div class="hint">Android Chrome</div>
+      <div class="hint">Auto-crop: OpenCV</div>
     </div>
     """,
     unsafe_allow_html=True
 )
 
-col_a, col_b = st.columns([1, 1])
-with col_a:
-    if st.button("⛶ Fullscreen｜全螢幕", use_container_width=True):
-        request_fullscreen_and_landscape()
-with col_b:
-    if st.button("↻ Rotate phone｜請橫放", use_container_width=True):
-        request_fullscreen_and_landscape()
-
 st.markdown('<div class="camera-shell">', unsafe_allow_html=True)
-
 img = st.camera_input(" ", key=f"cam_{st.session_state.camera_key}", label_visibility="collapsed")
 
 frame_class = "guide good" if st.session_state.frame_good else "guide"
@@ -509,72 +492,54 @@ st.markdown(
 
 # ==================================================
 # Auto pipeline on capture
+#   1) OpenCV detect & crop/deskew
+#   2) Gemini only decides OK/NG (no corners)
+#   3) Gemini OCR -> Drive -> Sheets
 # ==================================================
 if img:
     st.session_state.frame_good = False
-    st.session_state.last_msg = "🧠 AI 判斷中…｜Checking…"
+    st.session_state.last_msg = "📐 自動裁切校正中…｜Auto crop & deskew…"
 
     raw_pil = Image.open(img).convert("RGB")
-    W, H = raw_pil.size
 
-    with st.spinner("AI checking…"):
-        qa, qa_raw = gemini_find_card_corners_and_quality(raw_pil)
-        if not qa:
-            st.session_state.last_msg = "❌ AI JSON 解析失敗｜Parse failed"
-            st.error("❌ AI 回傳格式異常（無法解析 JSON）")
-            st.code(qa_raw)
-            st.stop()
+    with st.spinner("Auto crop & deskew…"):
+        cropped, crop_ok, crop_reason = auto_crop_and_deskew(raw_pil)
 
-    ok = bool(qa.get("ok", False))
-    reason = str(qa.get("reason", "")).strip()
-    corners = qa.get("corners", None)
-
-    if not corners or not isinstance(corners, dict):
-        ok = False
-
-    if not ok:
-        st.session_state.frame_good = False
-        st.session_state.last_msg = "⚠️ 重拍：靠近/置中/避免反光｜Retake: closer/center/avoid glare"
-        if reason:
-            st.session_state.last_msg += f"（AI：{reason}）"
+    if not crop_ok:
+        st.session_state.last_msg = f"⚠️ {crop_reason}"
         if st.button("🔄 Retake｜重拍", use_container_width=True):
             st.session_state.camera_key += 1
             st.rerun()
         st.stop()
 
+    st.session_state.last_msg = "🧠 AI 檢查清晰度…｜AI readability check…"
+    with st.spinner("AI check…"):
+        q, q_raw = gemini_quality_ok(cropped)
+
+    if not bool(q.get("ok", False)):
+        zh = (q.get("reason_zh") or "不夠清楚，請重拍").strip()
+        en = (q.get("reason_en") or "Not clear enough, please retake").strip()
+        st.session_state.last_msg = f"⚠️ {zh}｜{en}"
+        if st.button("🔄 Retake｜重拍", use_container_width=True):
+            st.session_state.camera_key += 1
+            st.rerun()
+        st.stop()
+
+    # OK -> green frame + OCR + save
     st.session_state.frame_good = True
-    st.session_state.last_msg = "🟢 OK！自動裁切校正 → 辨識 → 儲存…｜Auto processing…"
+    st.session_state.last_msg = "🟢 OK！辨識 → 儲存…｜OCR → Save…"
 
-    with st.spinner("Processing…"):
-        warped_pil = raw_pil
-        warp_ok = False
-        try:
-            tl = corners.get("tl"); tr = corners.get("tr"); br = corners.get("br"); bl = corners.get("bl")
-            if all(isinstance(p, (list, tuple)) and len(p) == 2 for p in [tl, tr, br, bl]):
-                pts = np.array([
-                    clamp_point(tl, W, H),
-                    clamp_point(tr, W, H),
-                    clamp_point(br, W, H),
-                    clamp_point(bl, W, H),
-                ], dtype="float32")
-                rgb = np.array(raw_pil.convert("RGB"))
-                warped_rgb = four_point_transform_rgb(rgb, pts)
-                warped_pil = Image.fromarray(warped_rgb)
-                warp_ok = True
-        except:
-            warp_ok = False
-
-        ocr_img = warped_pil if warp_ok else raw_pil
-        info, ocr_raw = extract_info(ocr_img)
+    with st.spinner("OCR → Save…"):
+        info, ocr_raw = extract_info(cropped)
         if not info:
             st.session_state.last_msg = "❌ OCR JSON 解析失敗｜OCR parse failed"
             st.error("❌ OCR 回傳格式異常（無法解析 JSON）")
             st.code(ocr_raw)
             st.stop()
 
-        out_img = warped_pil if warp_ok else raw_pil
+        # Save cropped image (the corrected one)
         buf = BytesIO()
-        out_img.save(buf, format="JPEG", quality=92)
+        cropped.save(buf, format="JPEG", quality=92)
         img_bytes = buf.getvalue()
 
         try:
