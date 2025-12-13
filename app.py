@@ -1,20 +1,22 @@
 import streamlit as st
 import google.generativeai as genai
 import gspread
-from google_auth_oauthlib.flow import Flow
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
+from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from PIL import Image
 from io import BytesIO
-import json, time, re
+import json
+import time
+import re
+import cv2
+import numpy as np
 
-# --------------------------------------------------
-# UI 基本設定
-# --------------------------------------------------
+# ==================================================
+# Page / Mobile UX
+# ==================================================
 st.set_page_config(
-    page_title="Business Card Scanner｜名片掃描系統",
+    page_title="Business Card Scanner",
     page_icon="📇",
     layout="centered"
 )
@@ -23,43 +25,52 @@ st.markdown("""
 <style>
 #MainMenu, footer, header {visibility:hidden;}
 
-/* 拍攝區容器 */
-.camera-wrapper {
+body {
+    background-color: #0E1117;
+}
+
+.camera-box {
     position: relative;
     max-width: 420px;
     margin: auto;
 }
 
-/* 名片引導框 */
-.guide-frame {
+.frame {
     position: absolute;
     top: 18%;
     left: 5%;
     width: 90%;
     height: 45%;
-    border: 3px dashed #00C2FF;
-    border-radius: 12px;
-    box-shadow: 0 0 0 2000px rgba(0,0,0,0.35);
+    border: 4px dashed #FFD400;
+    border-radius: 18px;
+    box-shadow: 0 0 0 2000px rgba(0,0,0,0.45);
     pointer-events: none;
+    transition: border-color 0.4s ease;
 }
 
-/* 引導文字 */
-.guide-text {
+.frame.good {
+    border-color: #00E676;
+}
+
+.hint {
     position: absolute;
-    top: 8%;
+    top: 6%;
     width: 100%;
     text-align: center;
-    color: white;
     font-size: 16px;
     font-weight: bold;
+    color: white;
     pointer-events: none;
 }
 
-/* 拍照提示 */
-.capture-hint {
+.take-btn {
+    background: #0066FF;
+    color: white;
+    font-size: 20px;
+    padding: 16px;
+    border-radius: 16px;
     text-align: center;
-    margin-top: 10px;
-    font-size: 18px;
+    margin-top: 16px;
     font-weight: bold;
 }
 </style>
@@ -68,78 +79,102 @@ st.markdown("""
 if "camera_key" not in st.session_state:
     st.session_state.camera_key = 0
 
-# --------------------------------------------------
+# ==================================================
 # Gemini
-# --------------------------------------------------
+# ==================================================
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-# --------------------------------------------------
-# OAuth
-# --------------------------------------------------
-SCOPES = [
-    "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/spreadsheets"
-]
+# ==================================================
+# Google credentials (Service Account)
+# ==================================================
+def get_creds_and_folder():
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    if "\\n" in creds_dict["private_key"]:
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
 
-CLIENT_CONFIG = {
-    "web": {
-        "client_id": st.secrets["google_oauth"]["client_id"],
-        "client_secret": st.secrets["google_oauth"]["client_secret"],
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "redirect_uris": [st.secrets["google_oauth"]["redirect_uri"]],
-    }
-}
+    scopes = [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets"
+    ]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    folder_id = st.secrets["DRIVE_FOLDER_ID"]
+    return creds, folder_id
 
-def get_creds():
-    if "credentials" in st.session_state:
-        creds = Credentials.from_authorized_user_info(
-            json.loads(st.session_state["credentials"]), SCOPES
-        )
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            st.session_state["credentials"] = creds.to_json()
-        return creds
+# ==================================================
+# OpenCV: detect + crop + perspective correction
+# ==================================================
+def auto_crop_card(pil_img: Image.Image) -> Image.Image:
+    img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5,5), 0)
+    edged = cv2.Canny(blur, 75, 200)
 
-    params = st.experimental_get_query_params()
-    if "code" in params:
-        flow = Flow.from_client_config(
-            CLIENT_CONFIG,
-            scopes=SCOPES,
-            redirect_uri=st.secrets["google_oauth"]["redirect_uri"]
-        )
-        flow.fetch_token(code=params["code"][0])
-        creds = flow.credentials
-        st.session_state["credentials"] = creds.to_json()
-        st.experimental_set_query_params()
-        return creds
+    contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
-    flow = Flow.from_client_config(
-        CLIENT_CONFIG,
-        scopes=SCOPES,
-        redirect_uri=st.secrets["google_oauth"]["redirect_uri"]
-    )
-    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
-    st.info("🔐 Please sign in with Google｜請先登入 Google")
-    st.markdown(f"[👉 Login / 登入]({auth_url})")
-    st.stop()
+    for c in contours:
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        if len(approx) == 4:
+            pts = approx.reshape(4,2)
+            rect = order_points(pts)
+            return four_point_transform(img, rect)
 
-# --------------------------------------------------
-# Drive
-# --------------------------------------------------
-def upload_drive(img_bytes, filename, creds):
+    return pil_img
+
+def order_points(pts):
+    rect = np.zeros((4,2), dtype="float32")
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+    return rect
+
+def four_point_transform(image, rect):
+    (tl,tr,br,bl) = rect
+    widthA = np.linalg.norm(br - bl)
+    widthB = np.linalg.norm(tr - tl)
+    maxW = int(max(widthA, widthB))
+    heightA = np.linalg.norm(tr - br)
+    heightB = np.linalg.norm(tl - bl)
+    maxH = int(max(heightA, heightB))
+
+    dst = np.array([
+        [0,0],[maxW-1,0],[maxW-1,maxH-1],[0,maxH-1]
+    ], dtype="float32")
+
+    M = cv2.getPerspectiveTransform(rect, dst)
+    warp = cv2.warpPerspective(image, M, (maxW, maxH))
+    return Image.fromarray(cv2.cvtColor(warp, cv2.COLOR_BGR2RGB))
+
+# ==================================================
+# Gemini OCR
+# ==================================================
+def extract_info(image):
+    model = genai.GenerativeModel("models/gemini-2.0-flash")
+    prompt = """
+Return JSON only.
+{name,title,company,phone,fax,email,address,website}
+"""
+    res = model.generate_content([prompt, image])
+    m = re.search(r"\{[\s\S]*\}", res.text)
+    return json.loads(m.group()) if m else None
+
+# ==================================================
+# Upload / Sheet
+# ==================================================
+def upload_drive(img_bytes, filename, creds, folder_id):
     service = build("drive", "v3", credentials=creds)
     media = MediaIoBaseUpload(BytesIO(img_bytes), mimetype="image/jpeg")
     file = service.files().create(
-        body={"name": filename},
+        body={"name": filename, "parents":[folder_id]},
         media_body=media,
         fields="webViewLink"
     ).execute()
     return file["webViewLink"]
 
-# --------------------------------------------------
-# Sheets
-# --------------------------------------------------
 def save_sheet(data, link, creds):
     gc = gspread.authorize(creds)
     try:
@@ -147,10 +182,9 @@ def save_sheet(data, link, creds):
     except:
         sh = gc.create("Business_Cards_Data")
         sheet = sh.sheet1
-        sheet.append_row([
-            "時間","姓名","職稱","公司","電話","傳真",
-            "Email","地址","網址","拍攝檔案連結"
-        ])
+        sheet.append_row(
+            ["時間","姓名","職稱","公司","電話","傳真","Email","地址","網址","照片連結"]
+        )
 
     sheet.append_row([
         time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -165,80 +199,55 @@ def save_sheet(data, link, creds):
         link
     ])
 
-# --------------------------------------------------
-# AI 辨識
-# --------------------------------------------------
-def extract_info(image):
-    model = genai.GenerativeModel("models/gemini-2.0-flash")
-    prompt = """
-You are a business card OCR assistant.
-Output JSON only. No explanation.
-
-{
-  "name": "",
-  "title": "",
-  "company": "",
-  "phone": "",
-  "fax": "",
-  "email": "",
-  "address": "",
-  "website": ""
-}
-"""
-    res = model.generate_content([prompt, image])
-    raw = res.text.strip()
-
-    match = re.search(r"\{[\s\S]*\}", raw)
-    if not match:
-        return None
-
-    try:
-        return json.loads(match.group())
-    except:
-        return None
-
-# --------------------------------------------------
-# Main UI
-# --------------------------------------------------
+# ==================================================
+# UI
+# ==================================================
 st.title("📇 Business Card Scanner")
-st.caption("請將名片完整放入框線中｜Place the card fully inside the frame")
+st.caption("請將名片放入框線內｜Place card inside frame")
 
-creds = get_creds()
-
-st.markdown('<div class="camera-wrapper">', unsafe_allow_html=True)
+st.markdown('<div class="camera-box">', unsafe_allow_html=True)
 img = st.camera_input(
-    "📸 拍攝名片｜Take Photo",
+    "Take Photo",
     key=f"cam_{st.session_state.camera_key}",
     label_visibility="collapsed"
 )
 st.markdown("""
-<div class="guide-frame"></div>
-<div class="guide-text">
-請將名片填滿框線<br>
-Place the business card inside the frame
+<div class="frame"></div>
+<div class="hint">
+調整距離直到名片填滿<br>
+Adjust distance until card fills frame
 </div>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown(
-    '<div class="capture-hint">⬆️ 點擊上方按鈕拍攝｜Tap button above to capture</div>',
-    unsafe_allow_html=True
-)
+st.markdown('<div class="take-btn">📸 Take Photo｜拍攝</div>', unsafe_allow_html=True)
 
+# ==================================================
+# After capture
+# ==================================================
 if img:
-    img_bytes = img.getvalue()
-    image = Image.open(BytesIO(img_bytes))
+    creds, folder_id = get_creds_and_folder()
 
-    with st.spinner("🤖 AI Recognizing｜AI 辨識中..."):
-        info = extract_info(image)
+    raw_img = Image.open(img)
+    cropped = auto_crop_card(raw_img)
+
+    st.markdown("""
+    <script>
+    document.querySelector('.frame')?.classList.add('good');
+    </script>
+    """, unsafe_allow_html=True)
+
+    with st.spinner("🤖 AI Processing｜辨識中"):
+        info = extract_info(cropped)
 
     if info:
-        with st.spinner("☁️ Saving｜儲存中..."):
-            link = upload_drive(img_bytes, f"card_{int(time.time())}.jpg", creds)
-            save_sheet(info, link, creds)
+        buf = BytesIO()
+        cropped.save(buf, format="JPEG")
+        link = upload_drive(buf.getvalue(), f"card_{int(time.time())}.jpg", creds, folder_id)
+        save_sheet(info, link, creds)
 
-        st.success("✅ Completed｜建檔完成")
+        st.success("✅ 完成｜Saved Successfully")
         st.balloons()
         st.session_state.camera_key += 1
-        time.sleep(1.2)
+        time.sleep(1)
         st.rerun()
