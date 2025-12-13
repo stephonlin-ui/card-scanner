@@ -8,11 +8,10 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from PIL import Image
 from io import BytesIO
-import json
-import time
+import json, time, re
 
 # --------------------------------------------------
-# 基本設定
+# UI
 # --------------------------------------------------
 st.set_page_config(page_title="📇 雲端名片系統", page_icon="📇")
 st.markdown("""
@@ -27,12 +26,12 @@ if "camera_key" not in st.session_state:
     st.session_state.camera_key = 0
 
 # --------------------------------------------------
-# Gemini 設定
+# Gemini
 # --------------------------------------------------
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # --------------------------------------------------
-# OAuth 設定
+# OAuth
 # --------------------------------------------------
 SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
@@ -49,7 +48,7 @@ CLIENT_CONFIG = {
     }
 }
 
-def get_oauth_credentials():
+def get_creds():
     if "credentials" in st.session_state:
         creds = Credentials.from_authorized_user_info(
             json.loads(st.session_state["credentials"]), SCOPES
@@ -77,44 +76,39 @@ def get_oauth_credentials():
         scopes=SCOPES,
         redirect_uri=st.secrets["google_oauth"]["redirect_uri"]
     )
-    auth_url, _ = flow.authorization_url(
-        prompt="consent",
-        access_type="offline"
-    )
-    st.info("請先授權 Google Drive / Sheets")
-    st.markdown(f"👉 [使用 Google 帳號登入]({auth_url})")
+    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+    st.info("請先登入 Google 帳號")
+    st.markdown(f"[👉 點我登入]({auth_url})")
     st.stop()
 
 # --------------------------------------------------
-# Google Drive 上傳
+# Drive
 # --------------------------------------------------
-def upload_image_to_drive(image_bytes, filename, creds):
+def upload_drive(img_bytes, filename, creds):
     service = build("drive", "v3", credentials=creds)
-    media = MediaIoBaseUpload(BytesIO(image_bytes), mimetype="image/jpeg")
+    media = MediaIoBaseUpload(BytesIO(img_bytes), mimetype="image/jpeg")
     file = service.files().create(
         body={"name": filename},
         media_body=media,
-        fields="id, webViewLink"
+        fields="webViewLink"
     ).execute()
     return file["webViewLink"]
 
 # --------------------------------------------------
-# Google Sheets 寫入
+# Sheets
 # --------------------------------------------------
-def save_to_sheets(data, image_link, creds):
+def save_sheet(data, link, creds):
     gc = gspread.authorize(creds)
-
     try:
         sheet = gc.open("Business_Cards_Data").sheet1
     except:
         sh = gc.create("Business_Cards_Data")
         sheet = sh.sheet1
-        sheet.append_row([
-            "拍攝時間", "姓名", "職稱", "公司",
-            "電話", "Email", "地址", "照片連結"
-        ])
+        sheet.append_row(
+            ["時間","姓名","職稱","公司","電話","Email","地址","照片"]
+        )
 
-    row = [
+    sheet.append_row([
         time.strftime("%Y-%m-%d %H:%M:%S"),
         data.get("name",""),
         data.get("title",""),
@@ -122,17 +116,19 @@ def save_to_sheets(data, image_link, creds):
         data.get("phone",""),
         data.get("email",""),
         data.get("address",""),
-        image_link
-    ]
-    sheet.append_row(row)
+        link
+    ])
 
 # --------------------------------------------------
-# Gemini 名片辨識
+# 🔥 關鍵修正：穩定 JSON 擷取
 # --------------------------------------------------
 def extract_info(image):
     model = genai.GenerativeModel("models/gemini-2.0-flash")
     prompt = """
-請從名片圖片中擷取資訊，並只輸出 JSON：
+你是 OCR 助手。
+請「只輸出 JSON」，不要任何說明、不要 markdown。
+如果沒有資訊請留空字串。
+
 {
   "name": "",
   "title": "",
@@ -142,42 +138,51 @@ def extract_info(image):
   "address": ""
 }
 """
-    response = model.generate_content([prompt, image])
-    text = response.text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-    return json.loads(text)
+    res = model.generate_content([prompt, image])
+    raw = res.text.strip()
+
+    # 👉 自動擷取 { ... }
+    match = re.search(r"\{[\s\S]*\}", raw)
+    if not match:
+        st.error("❌ Gemini 沒有回傳 JSON")
+        st.code(raw)
+        return None
+
+    try:
+        return json.loads(match.group())
+    except Exception as e:
+        st.error("❌ JSON 解析失敗")
+        st.code(match.group())
+        return None
 
 # --------------------------------------------------
-# 主畫面
+# Main
 # --------------------------------------------------
-st.title("📇 雲端名片系統（OAuth 版）")
+st.title("📇 雲端名片系統")
 
-creds = get_oauth_credentials()
+creds = get_creds()
 
-img_file = st.camera_input(
+img = st.camera_input(
     "拍照",
-    key=f"camera_{st.session_state.camera_key}",
+    key=f"cam_{st.session_state.camera_key}",
     label_visibility="hidden"
 )
 
-if img_file:
-    img_bytes = img_file.getvalue()
+if img:
+    img_bytes = img.getvalue()
     image = Image.open(BytesIO(img_bytes))
     st.image(image, use_column_width=True)
 
-    with st.spinner("🤖 AI 辨識中..."):
+    with st.spinner("🤖 辨識中..."):
         info = extract_info(image)
 
     if info:
         st.success(f"辨識成功：{info.get('name','')}")
-        with st.spinner("☁️ 上傳雲端並寫入 Sheet..."):
-            filename = f"Card_{int(time.time())}.jpg"
-            link = upload_image_to_drive(img_bytes, filename, creds)
-            save_to_sheets(info, link, creds)
+        with st.spinner("☁️ 儲存中..."):
+            link = upload_drive(img_bytes, f"card_{int(time.time())}.jpg", creds)
+            save_sheet(info, link, creds)
 
         st.balloons()
-        st.success("✅ 建檔完成")
         st.session_state.camera_key += 1
-        time.sleep(2)
+        time.sleep(1.5)
         st.rerun()
