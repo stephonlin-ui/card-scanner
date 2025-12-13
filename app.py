@@ -346,4 +346,162 @@ def save_sheet(data: dict, link: str, creds: Credentials):
         data.get("fax",""),                  # F
         data.get("email",""),                # G
         data.get("address",""),              # H
-        data.get("website",
+        data.get("website",""),              # I
+        link                                 # J
+    ])
+
+# ==================================================
+# Main UI
+# ==================================================
+st.title("📇 Business Card Scanner｜名片掃描")
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown("**拍照前：** 讓名片盡量填滿框線（越滿越準）  \n**Before capture:** Fill the frame with the card for best OCR.")
+st.markdown('<span class="badge">Mobile-friendly • Touch UI • Simple</span>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+creds = get_oauth_creds()
+
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.subheader("📸 Take Photo｜拍攝")
+
+st.markdown('<div class="camera-wrap">', unsafe_allow_html=True)
+img = st.camera_input(
+    "Take photo｜拍照",
+    key=f"cam_{st.session_state.camera_key}",
+    label_visibility="collapsed"
+)
+
+frame_class = "guide good" if st.session_state.frame_good else "guide"
+st.markdown(f"""
+<div class="{frame_class}"></div>
+<div class="guide-text">
+請把名片放滿框線<br/>Place the card inside the frame
+</div>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown('<div class="big-note">拍完後會用 AI 判斷距離與角點 → 自動裁切校正 → 再辨識並儲存。<br/>After capture: AI checks framing + corners → auto crop/deskew → OCR & save.</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ==================================================
+# After capture pipeline:
+# 1) Gemini QA + corners (pixel)
+# 2) Warp (crop + deskew)
+# 3) OCR on warped
+# ==================================================
+if img:
+    st.session_state.frame_good = False
+
+    raw_pil = Image.open(img).convert("RGB")
+    W, H = raw_pil.size
+
+    with st.spinner("🧠 AI Checking Framing｜AI 判斷拍攝距離/位置..."):
+        qa, qa_raw = gemini_find_card_corners_and_quality(raw_pil)
+        if not qa:
+            st.error("❌ AI 回傳格式異常（無法解析 JSON）｜Failed to parse AI JSON")
+            st.code(qa_raw)
+            st.stop()
+
+    ok = bool(qa.get("ok", False))
+    reason = str(qa.get("reason", "")).strip()
+    coverage = qa.get("coverage", 0.0)
+    corners = qa.get("corners", None)
+
+    if not corners or not isinstance(corners, dict):
+        ok = False
+
+    st.session_state.frame_good = bool(ok)
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    if ok:
+        st.success(f"✅ 距離/位置良好｜Good framing  (coverage: {coverage:.0%})")
+    else:
+        msg = "⚠️ 建議重拍：請靠近一點、讓名片完整入框、避免反光｜Retake: move closer, keep full card in frame, avoid glare"
+        if reason:
+            msg += f"\n\nAI：{reason}"
+        st.warning(msg)
+
+    # If we have corners, produce a warp preview
+    warped_pil = raw_pil
+    warp_ok = False
+
+    if corners and isinstance(corners, dict):
+        try:
+            tl = corners.get("tl", None)
+            tr = corners.get("tr", None)
+            br = corners.get("br", None)
+            bl = corners.get("bl", None)
+
+            if all(isinstance(p, (list, tuple)) and len(p) == 2 for p in [tl, tr, br, bl]):
+                pts = np.array([
+                    clamp_point(tl, W, H),
+                    clamp_point(tr, W, H),
+                    clamp_point(br, W, H),
+                    clamp_point(bl, W, H),
+                ], dtype="float32")
+
+                rgb = np.array(raw_pil.convert("RGB"))
+                warped_rgb = four_point_transform_rgb(rgb, pts)
+                warped_pil = Image.fromarray(warped_rgb)
+                warp_ok = True
+        except:
+            warp_ok = False
+
+    st.write("🖼️ Crop & Deskew Preview｜裁切＋校正預覽")
+    st.image(warped_pil, use_container_width=True)
+
+    st.markdown('<hr class="soft"/>', unsafe_allow_html=True)
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        proceed = st.button("✅ Process & Save｜辨識並儲存", type="primary", use_container_width=True)
+    with col2:
+        retry = st.button("🔄 Retake｜重拍", use_container_width=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if retry:
+        st.session_state.camera_key += 1
+        st.session_state.frame_good = False
+        st.rerun()
+
+    if proceed:
+        # If AI says not ok, still allow save (some users want it).
+        # But if we couldn't warp, we fall back to raw photo for OCR.
+        ocr_img = warped_pil if warp_ok else raw_pil
+
+        with st.spinner("🤖 OCR & Saving｜辨識與儲存中..."):
+            info, ocr_raw = extract_info(ocr_img)
+            if not info:
+                st.error("❌ OCR 回傳格式異常（無法解析 JSON）｜Failed to parse OCR JSON")
+                st.code(ocr_raw)
+                st.stop()
+
+            # Upload the corrected (warped) image if available; else upload raw.
+            out_img = warped_pil if warp_ok else raw_pil
+            buf = BytesIO()
+            out_img.save(buf, format="JPEG", quality=92)
+            img_bytes = buf.getvalue()
+
+            try:
+                link = upload_drive(img_bytes, f"card_{int(time.time())}.jpg", creds)
+            except HttpError as e:
+                st.error("❌ Google Drive 上傳失敗｜Drive upload failed")
+                status = getattr(e.resp, "status", "unknown")
+                content = e.content.decode("utf-8", errors="ignore") if getattr(e, "content", None) else str(e)
+                st.code(f"HTTP {status}\n{content[:2000]}")
+                st.stop()
+
+            try:
+                save_sheet(info, link, creds)
+            except Exception as e:
+                st.error("❌ Google Sheets 寫入失敗｜Sheets write failed")
+                st.code(str(e))
+                st.stop()
+
+        st.success("✅ 完成｜Saved Successfully")
+        st.balloons()
+        st.session_state.camera_key += 1
+        st.session_state.frame_good = False
+        time.sleep(1.0)
+        st.rerun()
