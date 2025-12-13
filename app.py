@@ -16,43 +16,90 @@ import cv2
 import numpy as np
 
 # ==================================================
-# Page / Mobile-first UI
+# iPhone-first camera UI
 # ==================================================
-st.set_page_config(
-    page_title="Business Card Scanner｜名片掃描",
-    page_icon="📇",
-    layout="centered",
-)
+st.set_page_config(page_title="Card Scanner", page_icon="📇", layout="wide")
 
 st.markdown("""
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <style>
 #MainMenu, footer, header {visibility:hidden;}
-.block-container {padding-top: 1rem; padding-bottom: 2rem; max-width: 560px;}
 
+/* iPhone：把 Streamlit 內邊距壓到 0，避免相機變小 */
+.block-container{
+  padding: 0 !important;
+  max-width: 100vw !important;
+}
+main > div{
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* iPhone 安全區（瀏海/底條） */
 :root{
-  --card:#151A23;
-  --muted:#AAB4C0;
+  --safe-top: env(safe-area-inset-top);
+  --safe-bottom: env(safe-area-inset-bottom);
   --yellow:#FFD400;
   --green:#00E676;
 }
 
-.panel{
-  background: var(--card);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 18px;
-  padding: 14px;
+.topbar{
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(14,17,23,0.75);
+  backdrop-filter: blur(10px);
+  padding: calc(8px + var(--safe-top)) 12px 10px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.topbar .title{
+  font-size: 14px;
+  font-weight: 900;
+  color: #E9EEF6;
+  line-height: 1.1;
+}
+.topbar .sub{
+  font-size: 12px;
+  color: rgba(233,238,246,0.70);
+  margin-top: 3px;
+  line-height: 1.2;
 }
 
-.camera-wrap{ position: relative; margin-top: 10px; }
+/* 相機區：盡量佔滿（扣掉 topbar 和 bottom bar） */
+.camera-shell{
+  position: relative;
+  width: 100vw;
+  height: calc(100vh - (68px + var(--safe-top)) - (56px + var(--safe-bottom)));
+  background: #0E1117;
+  overflow: hidden;
+}
+
+/* Streamlit camera 元件放大 */
+.camera-shell [data-testid="stCameraInput"]{
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+}
+
+/* iPhone Safari 可能用 video/img/canvas 包：全部設成滿寬 */
+.camera-shell video,
+.camera-shell img,
+.camera-shell canvas{
+  width: 100% !important;
+  height: auto !important;
+  border-radius: 0 !important;
+}
+
+/* 引導框：針對 iPhone 直向畫面調整位置/比例 */
 .guide{
   position:absolute;
-  top: 14%;
-  left: 6%;
-  width: 88%;
-  height: 52%;
+  top: 20%;
+  left: 5%;
+  width: 90%;
+  height: 44%;
   border: 4px dashed var(--yellow);
   border-radius: 18px;
-  box-shadow: 0 0 0 2000px rgba(0,0,0,0.35);
+  box-shadow: 0 0 0 2000px rgba(0,0,0,0.25);
   pointer-events:none;
   transition: border-color 0.35s ease, transform 0.35s ease;
 }
@@ -61,48 +108,47 @@ st.markdown("""
   animation: pop 0.55s ease;
 }
 @keyframes pop{
-  0% {transform: scale(0.98);}
+  0% {transform: scale(0.985);}
   60%{transform: scale(1.02);}
   100%{transform: scale(1.0);}
 }
 .guide-text{
   position:absolute;
-  top: 4%;
+  top: 10%;
   width: 100%;
   text-align:center;
-  font-weight: 800;
-  color: white;
+  font-weight: 900;
+  font-size: 13px;
+  color: #fff;
   pointer-events:none;
   text-shadow: 0 2px 10px rgba(0,0,0,0.55);
+  line-height: 1.2;
+}
+
+/* 底部狀態列：小、不擋畫面、適配 iPhone 底部安全區 */
+.bottombar{
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  background: rgba(14,17,23,0.78);
+  backdrop-filter: blur(10px);
+  padding: 10px 12px calc(10px + var(--safe-bottom)) 12px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.bottombar .msg{
+  font-size: 12px;
+  color: rgba(233,238,246,0.80);
   line-height: 1.25;
 }
 
-.badge{
-  display:inline-block;
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.08);
-  color: var(--muted);
-  margin-top: 6px;
-}
-
-.big-note{
-  font-size: 14px;
-  color: var(--muted);
-  margin-top: 8px;
-  line-height: 1.35;
-}
-
-hr.soft{
-  border: none;
-  border-top: 1px solid rgba(255,255,255,0.08);
-  margin: 12px 0;
-}
-
-.small{
-  font-size: 12px;
-  color: var(--muted);
+/* 按鈕：大、滿寬、iPhone 觸控友善 */
+div.stButton > button{
+  border-radius: 14px !important;
+  padding: 12px 14px !important;
+  font-weight: 900 !important;
+  font-size: 16px !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -111,8 +157,8 @@ if "camera_key" not in st.session_state:
     st.session_state.camera_key = 0
 if "frame_good" not in st.session_state:
     st.session_state.frame_good = False
-if "last_saved" not in st.session_state:
-    st.session_state.last_saved = ""
+if "last_msg" not in st.session_state:
+    st.session_state.last_msg = "請將名片填滿框線｜Fill the frame with the card"
 
 # ==================================================
 # Gemini
@@ -174,11 +220,13 @@ def get_oauth_creds():
     )
     auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
 
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.subheader("🔐 Sign in｜登入")
-    st.write("請先登入 Google 才能上傳到 Drive 並寫入 Sheets。")
+    st.markdown(f"""
+    <div class="topbar">
+      <div class="title">🔐 Login required｜需要登入</div>
+      <div class="sub">請先登入 Google 才能上傳 Drive / 寫入 Sheets</div>
+    </div>
+    """, unsafe_allow_html=True)
     st.markdown(f"[👉 Login with Google｜使用 Google 登入]({auth_url})")
-    st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
 # ==================================================
@@ -212,8 +260,8 @@ def four_point_transform_rgb(rgb: np.ndarray, pts4: np.ndarray) -> np.ndarray:
     heightB = np.linalg.norm(tl - bl)
     maxH = int(max(heightA, heightB))
 
-    maxW = max(maxW, 240)
-    maxH = max(maxH, 140)
+    maxW = max(maxW, 280)
+    maxH = max(maxH, 170)
 
     dst = np.array([
         [0, 0],
@@ -227,29 +275,21 @@ def four_point_transform_rgb(rgb: np.ndarray, pts4: np.ndarray) -> np.ndarray:
     return warped
 
 # ==================================================
-# Gemini: framing quality + corners (PIXEL coords)
+# Gemini: corners + quality (PIXELS)
 # ==================================================
 def gemini_find_card_corners_and_quality(pil_img: Image.Image):
     model = genai.GenerativeModel("models/gemini-2.0-flash")
     w, h = pil_img.size
     prompt = f"""
-You are a business card framing assistant.
-Analyze the photo and return JSON only (no markdown, no explanation).
-Task:
-1) Determine if the card is well-framed (fills enough of the image, not cut off, not too blurry/glare).
-2) If a card is present, return the 4 card corners in PIXEL coordinates relative to the image.
+Return JSON only.
 
-Image size:
-width={w}, height={h}
+Image size: width={w}, height={h}
 
-Rules:
-- corners must be numbers (pixels).
-- Use these keys: tl, tr, br, bl.
-- If you cannot confidently find corners, set ok=false and corners=null.
-- coverage is approximate fraction of image area occupied by the card (0..1).
-- reason: short reason in Chinese.
+Decide if card is readable & well-framed.
+If OK: provide 4 corners in PIXEL coords.
+If not OK: ok=false, corners=null.
 
-Return exactly:
+Format:
 {{
   "ok": true/false,
   "reason": "",
@@ -273,14 +313,12 @@ Return exactly:
         return None, m.group()
 
 # ==================================================
-# Gemini OCR (robust JSON)
+# Gemini OCR
 # ==================================================
 def extract_info(card_image: Image.Image):
     model = genai.GenerativeModel("models/gemini-2.0-flash")
     prompt = """
-You are a business card OCR assistant.
-Output JSON only. No markdown, no explanation.
-If unknown, use empty string.
+Output JSON only.
 
 {
   "name": "",
@@ -304,7 +342,7 @@ If unknown, use empty string.
         return None, m.group()
 
 # ==================================================
-# Drive + Sheets (OAuth)
+# Drive + Sheets
 # ==================================================
 def upload_drive(img_bytes: bytes, filename: str, creds: Credentials) -> str:
     service = build("drive", "v3", credentials=creds, cache_discovery=False)
@@ -330,104 +368,90 @@ def save_sheet(data: dict, link: str, creds: Credentials):
         sheet.append_row(["時間","姓名","職稱","公司","電話","傳真","Email","地址","網址","拍攝的檔案連結"])
 
     sheet.append_row([
-        time.strftime("%Y-%m-%d %H:%M:%S"),  # A
-        data.get("name",""),                 # B
-        data.get("title",""),                # C
-        data.get("company",""),              # D
-        data.get("phone",""),                # E
-        data.get("fax",""),                  # F
-        data.get("email",""),                # G
-        data.get("address",""),              # H
-        data.get("website",""),              # I
-        link                                 # J
+        time.strftime("%Y-%m-%d %H:%M:%S"),
+        data.get("name",""),
+        data.get("title",""),
+        data.get("company",""),
+        data.get("phone",""),
+        data.get("fax",""),
+        data.get("email",""),
+        data.get("address",""),
+        data.get("website",""),
+        link
     ])
 
 # ==================================================
-# Main UI
+# UI (minimal)
 # ==================================================
-st.title("📇 Business Card Scanner｜名片掃描")
-st.markdown('<div class="panel">', unsafe_allow_html=True)
-st.markdown("**拍照前：** 讓名片盡量填滿框線（越滿越準）  \n**Before capture:** Fill the frame with the card for best OCR.")
-st.markdown('<span class="badge">Mobile-friendly • Touch UI • Simple</span>', unsafe_allow_html=True)
-if st.session_state.last_saved:
-    st.markdown(f'<div class="small">✅ 上次已儲存｜Last saved: {st.session_state.last_saved}</div>', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
-
 creds = get_oauth_creds()
 
-st.markdown('<div class="panel">', unsafe_allow_html=True)
-st.subheader("📸 Take Photo｜拍攝")
-st.markdown('<div class="camera-wrap">', unsafe_allow_html=True)
+st.markdown("""
+<div class="topbar">
+  <div class="title">📇 名片掃描｜Card Scanner</div>
+  <div class="sub">把名片放滿框線後拍照｜Fill the frame then capture</div>
+</div>
+""", unsafe_allow_html=True)
 
-img = st.camera_input(
-    "Take photo｜拍照",
-    key=f"cam_{st.session_state.camera_key}",
-    label_visibility="collapsed"
-)
+st.markdown('<div class="camera-shell">', unsafe_allow_html=True)
+img = st.camera_input(" ", key=f"cam_{st.session_state.camera_key}", label_visibility="collapsed")
 
 frame_class = "guide good" if st.session_state.frame_good else "guide"
 st.markdown(f"""
 <div class="{frame_class}"></div>
-<div class="guide-text">
-請把名片放滿框線<br/>Place the card inside the frame
-</div>
+<div class="guide-text">請把名片放滿框線<br/>Fill the frame</div>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="big-note">拍完後若 AI 判定可辨識，將自動裁切校正 → OCR → 儲存，不需再按一次。<br/>If AI says OK, it auto crop/deskew → OCR → save (no extra tap).</div>', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
+st.markdown(f"""
+<div class="bottombar">
+  <div class="msg">{st.session_state.last_msg}</div>
+</div>
+""", unsafe_allow_html=True)
 
 # ==================================================
 # Auto pipeline on capture
 # ==================================================
 if img:
     st.session_state.frame_good = False
+    st.session_state.last_msg = "🧠 AI 判斷中…｜Checking…"
+
     raw_pil = Image.open(img).convert("RGB")
     W, H = raw_pil.size
 
-    with st.spinner("🧠 AI 判斷拍攝距離/位置｜AI checking framing..."):
+    with st.spinner("AI checking…"):
         qa, qa_raw = gemini_find_card_corners_and_quality(raw_pil)
         if not qa:
-            st.error("❌ AI 回傳格式異常（無法解析 JSON）｜Failed to parse AI JSON")
+            st.session_state.last_msg = "❌ AI JSON 解析失敗｜Parse failed"
+            st.error("❌ AI 回傳格式異常（無法解析 JSON）")
             st.code(qa_raw)
             st.stop()
 
     ok = bool(qa.get("ok", False))
     reason = str(qa.get("reason", "")).strip()
-    coverage = qa.get("coverage", 0.0)
     corners = qa.get("corners", None)
 
     if not corners or not isinstance(corners, dict):
         ok = False
 
-    st.session_state.frame_good = bool(ok)
-
-    # If not OK -> show reason + retake button only
     if not ok:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        msg = "⚠️ 建議重拍：請靠近一點、讓名片完整入框、避免反光或模糊。\n\nRetake: move closer, keep full card in frame, avoid glare/blur."
+        st.session_state.frame_good = False
+        st.session_state.last_msg = "⚠️ 重拍：靠近/置中/避免反光｜Retake: closer/center/avoid glare"
         if reason:
-            msg += f"\n\nAI：{reason}"
-        st.warning(msg)
-        st.caption(f"coverage: {coverage:.0%}" if isinstance(coverage, (int, float)) else "")
+            st.session_state.last_msg += f"（AI：{reason}）"
         if st.button("🔄 Retake｜重拍", use_container_width=True):
             st.session_state.camera_key += 1
-            st.session_state.frame_good = False
             st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
         st.stop()
 
-    # OK -> auto warp + OCR + save
-    with st.spinner("🟢 自動裁切/校正 → 辨識 → 儲存｜Auto crop/deskew → OCR → Save..."):
-        # Warp by AI corners
+    # OK -> green frame + auto crop/deskew -> OCR -> save
+    st.session_state.frame_good = True
+    st.session_state.last_msg = "🟢 OK！自動裁切校正 → 辨識 → 儲存…｜Auto processing…"
+
+    with st.spinner("Processing…"):
         warped_pil = raw_pil
         warp_ok = False
         try:
-            tl = corners.get("tl")
-            tr = corners.get("tr")
-            br = corners.get("br")
-            bl = corners.get("bl")
-
+            tl = corners.get("tl"); tr = corners.get("tr"); br = corners.get("br"); bl = corners.get("bl")
             if all(isinstance(p, (list, tuple)) and len(p) == 2 for p in [tl, tr, br, bl]):
                 pts = np.array([
                     clamp_point(tl, W, H),
@@ -442,15 +466,14 @@ if img:
         except:
             warp_ok = False
 
-        # OCR uses corrected image if warp succeeded; otherwise uses raw
         ocr_img = warped_pil if warp_ok else raw_pil
         info, ocr_raw = extract_info(ocr_img)
         if not info:
-            st.error("❌ OCR 回傳格式異常（無法解析 JSON）｜Failed to parse OCR JSON")
+            st.session_state.last_msg = "❌ OCR JSON 解析失敗｜OCR parse failed"
+            st.error("❌ OCR 回傳格式異常（無法解析 JSON）")
             st.code(ocr_raw)
             st.stop()
 
-        # Upload corrected image (preferred), else raw
         out_img = warped_pil if warp_ok else raw_pil
         buf = BytesIO()
         out_img.save(buf, format="JPEG", quality=92)
@@ -459,7 +482,8 @@ if img:
         try:
             link = upload_drive(img_bytes, f"card_{int(time.time())}.jpg", creds)
         except HttpError as e:
-            st.error("❌ Google Drive 上傳失敗｜Drive upload failed")
+            st.session_state.last_msg = "❌ Drive 上傳失敗｜Upload failed"
+            st.error("❌ Google Drive 上傳失敗")
             status = getattr(e.resp, "status", "unknown")
             content = e.content.decode("utf-8", errors="ignore") if getattr(e, "content", None) else str(e)
             st.code(f"HTTP {status}\n{content[:2000]}")
@@ -468,20 +492,12 @@ if img:
         try:
             save_sheet(info, link, creds)
         except Exception as e:
-            st.error("❌ Google Sheets 寫入失敗｜Sheets write failed")
+            st.session_state.last_msg = "❌ Sheets 寫入失敗｜Write failed"
+            st.error("❌ Google Sheets 寫入失敗")
             st.code(str(e))
             st.stop()
 
-    # Success UI
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.success("✅ 完成｜Saved Successfully")
-    st.caption(f"coverage: {coverage:.0%}" if isinstance(coverage, (int, float)) else "")
-    st.write("🔗 Drive Link｜照片連結：")
-    st.write(link)
-    st.markdown('<div class="small">將自動回到拍攝畫面（約 1 秒）｜Returning to camera…</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.session_state.last_saved = time.strftime("%Y-%m-%d %H:%M:%S")
+    st.session_state.last_msg = "✅ 已儲存｜Saved! 1 秒後回到相機…"
     st.balloons()
     st.session_state.camera_key += 1
     time.sleep(1.0)
