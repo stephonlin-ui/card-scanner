@@ -5,3 +5,7 @@ Pillow
 gspread
 oauth2client
 google-api-python-client
+
+# --- 新增（名片裁切 / 斜拍校正 必要） ---
+numpy
+opencv-python-headless
