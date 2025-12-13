@@ -99,6 +99,11 @@ hr.soft{
   border-top: 1px solid rgba(255,255,255,0.08);
   margin: 12px 0;
 }
+
+.small{
+  font-size: 12px;
+  color: var(--muted);
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -106,6 +111,8 @@ if "camera_key" not in st.session_state:
     st.session_state.camera_key = 0
 if "frame_good" not in st.session_state:
     st.session_state.frame_good = False
+if "last_saved" not in st.session_state:
+    st.session_state.last_saved = ""
 
 # ==================================================
 # Gemini
@@ -175,7 +182,7 @@ def get_oauth_creds():
     st.stop()
 
 # ==================================================
-# Geometry helpers (OpenCV warp)
+# OpenCV warp helpers
 # ==================================================
 def order_points(pts: np.ndarray) -> np.ndarray:
     rect = np.zeros((4, 2), dtype="float32")
@@ -187,8 +194,13 @@ def order_points(pts: np.ndarray) -> np.ndarray:
     rect[3] = pts[np.argmax(diff)]  # bl
     return rect
 
+def clamp_point(p, w, h):
+    x = float(p[0]); y = float(p[1])
+    x = max(0.0, min(x, float(w - 1)))
+    y = max(0.0, min(y, float(h - 1)))
+    return [x, y]
+
 def four_point_transform_rgb(rgb: np.ndarray, pts4: np.ndarray) -> np.ndarray:
-    # rgb shape: (H,W,3), pts4: 4x2 float32 in image pixel coords
     rect = order_points(pts4.astype("float32"))
     (tl, tr, br, bl) = rect
 
@@ -210,38 +222,21 @@ def four_point_transform_rgb(rgb: np.ndarray, pts4: np.ndarray) -> np.ndarray:
         [0, maxH - 1]
     ], dtype="float32")
 
-    M = cv2.getPerspectiveTransform(rect, dst)
+    M = cv2.getPerspectiveTransform(rect.astype("float32"), dst)
     warped = cv2.warpPerspective(rgb, M, (maxW, maxH))
     return warped
 
-def clamp_point(p, w, h):
-    x = float(p[0]); y = float(p[1])
-    x = max(0.0, min(x, float(w - 1)))
-    y = max(0.0, min(y, float(h - 1)))
-    return [x, y]
-
 # ==================================================
-# Gemini: Card QA + corners (PIXEL coords)
+# Gemini: framing quality + corners (PIXEL coords)
 # ==================================================
 def gemini_find_card_corners_and_quality(pil_img: Image.Image):
-    """
-    Returns:
-      {
-        ok: bool,
-        reason: str,
-        coverage: float,
-        corners: { tl:[x,y], tr:[x,y], br:[x,y], bl:[x,y] }
-      }, raw_text
-    """
     model = genai.GenerativeModel("models/gemini-2.0-flash")
-
-    # Tell Gemini we need PIXEL coords based on image size.
     w, h = pil_img.size
     prompt = f"""
 You are a business card framing assistant.
 Analyze the photo and return JSON only (no markdown, no explanation).
 Task:
-1) Determine if the card is well-framed (fills enough of the image, not cut off, not too tilted/blurred).
+1) Determine if the card is well-framed (fills enough of the image, not cut off, not too blurry/glare).
 2) If a card is present, return the 4 card corners in PIXEL coordinates relative to the image.
 
 Image size:
@@ -252,7 +247,7 @@ Rules:
 - Use these keys: tl, tr, br, bl.
 - If you cannot confidently find corners, set ok=false and corners=null.
 - coverage is approximate fraction of image area occupied by the card (0..1).
-- reason: short reason in English or Chinese.
+- reason: short reason in Chinese.
 
 Return exactly:
 {{
@@ -269,14 +264,11 @@ Return exactly:
 """
     res = model.generate_content([prompt, pil_img])
     raw = (res.text or "").strip()
-
     m = re.search(r"\{[\s\S]*\}", raw)
     if not m:
         return None, raw
-
     try:
-        data = json.loads(m.group())
-        return data, raw
+        return json.loads(m.group()), raw
     except:
         return None, m.group()
 
@@ -357,14 +349,16 @@ st.title("📇 Business Card Scanner｜名片掃描")
 st.markdown('<div class="panel">', unsafe_allow_html=True)
 st.markdown("**拍照前：** 讓名片盡量填滿框線（越滿越準）  \n**Before capture:** Fill the frame with the card for best OCR.")
 st.markdown('<span class="badge">Mobile-friendly • Touch UI • Simple</span>', unsafe_allow_html=True)
+if st.session_state.last_saved:
+    st.markdown(f'<div class="small">✅ 上次已儲存｜Last saved: {st.session_state.last_saved}</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 creds = get_oauth_creds()
 
 st.markdown('<div class="panel">', unsafe_allow_html=True)
 st.subheader("📸 Take Photo｜拍攝")
-
 st.markdown('<div class="camera-wrap">', unsafe_allow_html=True)
+
 img = st.camera_input(
     "Take photo｜拍照",
     key=f"cam_{st.session_state.camera_key}",
@@ -380,22 +374,18 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="big-note">拍完後會用 AI 判斷距離與角點 → 自動裁切校正 → 再辨識並儲存。<br/>After capture: AI checks framing + corners → auto crop/deskew → OCR & save.</div>', unsafe_allow_html=True)
+st.markdown('<div class="big-note">拍完後若 AI 判定可辨識，將自動裁切校正 → OCR → 儲存，不需再按一次。<br/>If AI says OK, it auto crop/deskew → OCR → save (no extra tap).</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ==================================================
-# After capture pipeline:
-# 1) Gemini QA + corners (pixel)
-# 2) Warp (crop + deskew)
-# 3) OCR on warped
+# Auto pipeline on capture
 # ==================================================
 if img:
     st.session_state.frame_good = False
-
     raw_pil = Image.open(img).convert("RGB")
     W, H = raw_pil.size
 
-    with st.spinner("🧠 AI Checking Framing｜AI 判斷拍攝距離/位置..."):
+    with st.spinner("🧠 AI 判斷拍攝距離/位置｜AI checking framing..."):
         qa, qa_raw = gemini_find_card_corners_and_quality(raw_pil)
         if not qa:
             st.error("❌ AI 回傳格式異常（無法解析 JSON）｜Failed to parse AI JSON")
@@ -412,25 +402,31 @@ if img:
 
     st.session_state.frame_good = bool(ok)
 
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    if ok:
-        st.success(f"✅ 距離/位置良好｜Good framing  (coverage: {coverage:.0%})")
-    else:
-        msg = "⚠️ 建議重拍：請靠近一點、讓名片完整入框、避免反光｜Retake: move closer, keep full card in frame, avoid glare"
+    # If not OK -> show reason + retake button only
+    if not ok:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        msg = "⚠️ 建議重拍：請靠近一點、讓名片完整入框、避免反光或模糊。\n\nRetake: move closer, keep full card in frame, avoid glare/blur."
         if reason:
             msg += f"\n\nAI：{reason}"
         st.warning(msg)
+        st.caption(f"coverage: {coverage:.0%}" if isinstance(coverage, (int, float)) else "")
+        if st.button("🔄 Retake｜重拍", use_container_width=True):
+            st.session_state.camera_key += 1
+            st.session_state.frame_good = False
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.stop()
 
-    # If we have corners, produce a warp preview
-    warped_pil = raw_pil
-    warp_ok = False
-
-    if corners and isinstance(corners, dict):
+    # OK -> auto warp + OCR + save
+    with st.spinner("🟢 自動裁切/校正 → 辨識 → 儲存｜Auto crop/deskew → OCR → Save..."):
+        # Warp by AI corners
+        warped_pil = raw_pil
+        warp_ok = False
         try:
-            tl = corners.get("tl", None)
-            tr = corners.get("tr", None)
-            br = corners.get("br", None)
-            bl = corners.get("bl", None)
+            tl = corners.get("tl")
+            tr = corners.get("tr")
+            br = corners.get("br")
+            bl = corners.get("bl")
 
             if all(isinstance(p, (list, tuple)) and len(p) == 2 for p in [tl, tr, br, bl]):
                 pts = np.array([
@@ -439,7 +435,6 @@ if img:
                     clamp_point(br, W, H),
                     clamp_point(bl, W, H),
                 ], dtype="float32")
-
                 rgb = np.array(raw_pil.convert("RGB"))
                 warped_rgb = four_point_transform_rgb(rgb, pts)
                 warped_pil = Image.fromarray(warped_rgb)
@@ -447,61 +442,47 @@ if img:
         except:
             warp_ok = False
 
-    st.write("🖼️ Crop & Deskew Preview｜裁切＋校正預覽")
-    st.image(warped_pil, use_container_width=True)
+        # OCR uses corrected image if warp succeeded; otherwise uses raw
+        ocr_img = warped_pil if warp_ok else raw_pil
+        info, ocr_raw = extract_info(ocr_img)
+        if not info:
+            st.error("❌ OCR 回傳格式異常（無法解析 JSON）｜Failed to parse OCR JSON")
+            st.code(ocr_raw)
+            st.stop()
 
-    st.markdown('<hr class="soft"/>', unsafe_allow_html=True)
+        # Upload corrected image (preferred), else raw
+        out_img = warped_pil if warp_ok else raw_pil
+        buf = BytesIO()
+        out_img.save(buf, format="JPEG", quality=92)
+        img_bytes = buf.getvalue()
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        proceed = st.button("✅ Process & Save｜辨識並儲存", type="primary", use_container_width=True)
-    with col2:
-        retry = st.button("🔄 Retake｜重拍", use_container_width=True)
+        try:
+            link = upload_drive(img_bytes, f"card_{int(time.time())}.jpg", creds)
+        except HttpError as e:
+            st.error("❌ Google Drive 上傳失敗｜Drive upload failed")
+            status = getattr(e.resp, "status", "unknown")
+            content = e.content.decode("utf-8", errors="ignore") if getattr(e, "content", None) else str(e)
+            st.code(f"HTTP {status}\n{content[:2000]}")
+            st.stop()
 
+        try:
+            save_sheet(info, link, creds)
+        except Exception as e:
+            st.error("❌ Google Sheets 寫入失敗｜Sheets write failed")
+            st.code(str(e))
+            st.stop()
+
+    # Success UI
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.success("✅ 完成｜Saved Successfully")
+    st.caption(f"coverage: {coverage:.0%}" if isinstance(coverage, (int, float)) else "")
+    st.write("🔗 Drive Link｜照片連結：")
+    st.write(link)
+    st.markdown('<div class="small">將自動回到拍攝畫面（約 1 秒）｜Returning to camera…</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    if retry:
-        st.session_state.camera_key += 1
-        st.session_state.frame_good = False
-        st.rerun()
-
-    if proceed:
-        # If AI says not ok, still allow save (some users want it).
-        # But if we couldn't warp, we fall back to raw photo for OCR.
-        ocr_img = warped_pil if warp_ok else raw_pil
-
-        with st.spinner("🤖 OCR & Saving｜辨識與儲存中..."):
-            info, ocr_raw = extract_info(ocr_img)
-            if not info:
-                st.error("❌ OCR 回傳格式異常（無法解析 JSON）｜Failed to parse OCR JSON")
-                st.code(ocr_raw)
-                st.stop()
-
-            # Upload the corrected (warped) image if available; else upload raw.
-            out_img = warped_pil if warp_ok else raw_pil
-            buf = BytesIO()
-            out_img.save(buf, format="JPEG", quality=92)
-            img_bytes = buf.getvalue()
-
-            try:
-                link = upload_drive(img_bytes, f"card_{int(time.time())}.jpg", creds)
-            except HttpError as e:
-                st.error("❌ Google Drive 上傳失敗｜Drive upload failed")
-                status = getattr(e.resp, "status", "unknown")
-                content = e.content.decode("utf-8", errors="ignore") if getattr(e, "content", None) else str(e)
-                st.code(f"HTTP {status}\n{content[:2000]}")
-                st.stop()
-
-            try:
-                save_sheet(info, link, creds)
-            except Exception as e:
-                st.error("❌ Google Sheets 寫入失敗｜Sheets write failed")
-                st.code(str(e))
-                st.stop()
-
-        st.success("✅ 完成｜Saved Successfully")
-        st.balloons()
-        st.session_state.camera_key += 1
-        st.session_state.frame_good = False
-        time.sleep(1.0)
-        st.rerun()
+    st.session_state.last_saved = time.strftime("%Y-%m-%d %H:%M:%S")
+    st.balloons()
+    st.session_state.camera_key += 1
+    time.sleep(1.0)
+    st.rerun()
