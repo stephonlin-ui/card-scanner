@@ -318,4 +318,6 @@ def upload_drive(img_bytes: bytes, filename: str, creds: Credentials) -> str:
     body = {"name": filename}
 
     # (可選) 若你想指定資料夾，可在 secrets 放 DRIVE_FOLDER_ID
-    folder_id = st.secrets.get("DRIVE_FOLDER_ID", "").strip() if "DRIVE_FOLDER_ID" in st.secre_
+    folder_id = ""
+if "DRIVE_FOLDER_ID" in st.secrets:
+    folder_id = st.secrets["DRIVE_FOLDER_ID"].strip()
