@@ -16,16 +16,16 @@ import cv2
 import numpy as np
 
 # ==================================================
-# iPhone-first camera UI
+# Android Chrome: camera-first UI
 # ==================================================
 st.set_page_config(page_title="Card Scanner", page_icon="📇", layout="wide")
 
 st.markdown("""
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <style>
 #MainMenu, footer, header {visibility:hidden;}
 
-/* iPhone：把 Streamlit 內邊距壓到 0，避免相機變小 */
+/* Android Chrome：去掉 Streamlit 預設 padding，讓相機最大 */
 .block-container{
   padding: 0 !important;
   max-width: 100vw !important;
@@ -35,53 +35,67 @@ main > div{
   padding-right: 0 !important;
 }
 
-/* iPhone 安全區（瀏海/底條） */
+/* Android Chrome 的網址列會動態收合，建議用 100dvh（新 Chrome 支援）
+   回退：100vh */
 :root{
-  --safe-top: env(safe-area-inset-top);
-  --safe-bottom: env(safe-area-inset-bottom);
   --yellow:#FFD400;
   --green:#00E676;
+  --bg:#0E1117;
+  --bar: 54px;
+  --bar2: 54px;
+}
+@supports (height: 100dvh){
+  .camera-shell{
+    height: calc(100dvh - var(--bar) - var(--bar2));
+  }
+}
+@supports not (height: 100dvh){
+  .camera-shell{
+    height: calc(100vh - var(--bar) - var(--bar2));
+  }
 }
 
+/* 上方提示列：更薄 */
 .topbar{
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(14,17,23,0.75);
+  background: rgba(14,17,23,0.78);
   backdrop-filter: blur(10px);
-  padding: calc(8px + var(--safe-top)) 12px 10px 12px;
+  padding: 8px 12px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
+  height: var(--bar);
+  box-sizing: border-box;
 }
 .topbar .title{
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 900;
   color: #E9EEF6;
   line-height: 1.1;
 }
 .topbar .sub{
-  font-size: 12px;
+  font-size: 11px;
   color: rgba(233,238,246,0.70);
-  margin-top: 3px;
+  margin-top: 2px;
   line-height: 1.2;
 }
 
-/* 相機區：盡量佔滿（扣掉 topbar 和 bottom bar） */
+/* 相機主區塊：滿版 */
 .camera-shell{
   position: relative;
   width: 100vw;
-  height: calc(100vh - (68px + var(--safe-top)) - (56px + var(--safe-bottom)));
-  background: #0E1117;
+  background: var(--bg);
   overflow: hidden;
 }
 
-/* Streamlit camera 元件放大 */
+/* Streamlit camera 元件撐滿 */
 .camera-shell [data-testid="stCameraInput"]{
   width: 100% !important;
   max-width: 100% !important;
   margin: 0 !important;
 }
 
-/* iPhone Safari 可能用 video/img/canvas 包：全部設成滿寬 */
+/* Android Chrome 可能用 video/img/canvas 包：都拉滿寬 */
 .camera-shell video,
 .camera-shell img,
 .camera-shell canvas{
@@ -90,13 +104,13 @@ main > div{
   border-radius: 0 !important;
 }
 
-/* 引導框：針對 iPhone 直向畫面調整位置/比例 */
+/* 引導框：Android 直向最舒服的位置（略偏上讓底部按鍵不擋） */
 .guide{
   position:absolute;
-  top: 20%;
+  top: 18%;
   left: 5%;
   width: 90%;
-  height: 44%;
+  height: 46%;
   border: 4px dashed var(--yellow);
   border-radius: 18px;
   box-shadow: 0 0 0 2000px rgba(0,0,0,0.25);
@@ -114,7 +128,7 @@ main > div{
 }
 .guide-text{
   position:absolute;
-  top: 10%;
+  top: 8%;
   width: 100%;
   text-align:center;
   font-weight: 900;
@@ -125,30 +139,33 @@ main > div{
   line-height: 1.2;
 }
 
-/* 底部狀態列：小、不擋畫面、適配 iPhone 底部安全區 */
+/* 底部狀態列：薄、固定、不擋相機主畫面 */
 .bottombar{
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
   z-index: 60;
-  background: rgba(14,17,23,0.78);
+  background: rgba(14,17,23,0.82);
   backdrop-filter: blur(10px);
-  padding: 10px 12px calc(10px + var(--safe-bottom)) 12px;
+  padding: 8px 12px;
   border-top: 1px solid rgba(255,255,255,0.06);
+  height: var(--bar2);
+  box-sizing: border-box;
 }
 .bottombar .msg{
-  font-size: 12px;
-  color: rgba(233,238,246,0.80);
+  font-size: 11.5px;
+  color: rgba(233,238,246,0.82);
   line-height: 1.25;
 }
 
-/* 按鈕：大、滿寬、iPhone 觸控友善 */
+/* 觸控按鈕：大、滿寬（主要用在重拍） */
 div.stButton > button{
   border-radius: 14px !important;
   padding: 12px 14px !important;
   font-weight: 900 !important;
   font-size: 16px !important;
+  width: 100% !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -235,11 +252,11 @@ def get_oauth_creds():
 def order_points(pts: np.ndarray) -> np.ndarray:
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]  # tl
-    rect[2] = pts[np.argmax(s)]  # br
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
     diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]  # tr
-    rect[3] = pts[np.argmax(diff)]  # bl
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
     return rect
 
 def clamp_point(p, w, h):
@@ -381,7 +398,7 @@ def save_sheet(data: dict, link: str, creds: Credentials):
     ])
 
 # ==================================================
-# UI (minimal)
+# UI
 # ==================================================
 creds = get_oauth_creds()
 
@@ -443,7 +460,6 @@ if img:
             st.rerun()
         st.stop()
 
-    # OK -> green frame + auto crop/deskew -> OCR -> save
     st.session_state.frame_good = True
     st.session_state.last_msg = "🟢 OK！自動裁切校正 → 辨識 → 儲存…｜Auto processing…"
 
