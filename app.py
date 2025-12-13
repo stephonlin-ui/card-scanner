@@ -104,53 +104,57 @@ def save_sheet(data, link, creds):
     except:
         sh = gc.create("Business_Cards_Data")
         sheet = sh.sheet1
-        sheet.append_row(
-            ["時間","姓名","職稱","公司","電話","Email","地址","照片"]
-        )
+        sheet.append_row([
+            "時間","姓名","職稱","公司","電話","傳真",
+            "Email","地址","網址","拍攝檔案連結"
+        ])
 
     sheet.append_row([
-        time.strftime("%Y-%m-%d %H:%M:%S"),
-        data.get("name",""),
-        data.get("title",""),
-        data.get("company",""),
-        data.get("phone",""),
-        data.get("email",""),
-        data.get("address",""),
-        link
+        time.strftime("%Y-%m-%d %H:%M:%S"),   # A
+        data.get("name",""),                  # B
+        data.get("title",""),                 # C
+        data.get("company",""),               # D
+        data.get("phone",""),                 # E
+        data.get("fax",""),                   # F
+        data.get("email",""),                 # G
+        data.get("address",""),               # H
+        data.get("website",""),               # I
+        link                                  # J
     ])
 
 # --------------------------------------------------
-# 🔥 關鍵修正：穩定 JSON 擷取
+# AI 名片辨識（已擴充欄位）
 # --------------------------------------------------
 def extract_info(image):
     model = genai.GenerativeModel("models/gemini-2.0-flash")
     prompt = """
-你是 OCR 助手。
-請「只輸出 JSON」，不要任何說明、不要 markdown。
-如果沒有資訊請留空字串。
+你是名片 OCR 助手。
+請「只輸出 JSON」，不要任何說明或 markdown。
+若沒有資料請填空字串。
 
 {
   "name": "",
   "title": "",
   "company": "",
   "phone": "",
+  "fax": "",
   "email": "",
-  "address": ""
+  "address": "",
+  "website": ""
 }
 """
     res = model.generate_content([prompt, image])
     raw = res.text.strip()
 
-    # 👉 自動擷取 { ... }
     match = re.search(r"\{[\s\S]*\}", raw)
     if not match:
-        st.error("❌ Gemini 沒有回傳 JSON")
+        st.error("❌ Gemini 沒有回傳有效 JSON")
         st.code(raw)
         return None
 
     try:
         return json.loads(match.group())
-    except Exception as e:
+    except:
         st.error("❌ JSON 解析失敗")
         st.code(match.group())
         return None
@@ -173,7 +177,7 @@ if img:
     image = Image.open(BytesIO(img_bytes))
     st.image(image, use_column_width=True)
 
-    with st.spinner("🤖 辨識中..."):
+    with st.spinner("🤖 名片辨識中..."):
         info = extract_info(image)
 
     if info:
