@@ -21,12 +21,13 @@ import numpy as np
 # ==================================================
 st.set_page_config(page_title="Card Scanner", page_icon="📇", layout="wide")
 
-# ✅ Use components.html to inject CSS (prevents CSS showing as text)
+# ---- CSS injected via components.html (prevents CSS showing as text) ----
 components.html(
     """
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <style>
 #MainMenu, footer, header {visibility:hidden;}
+html, body { height: 100%; background:#0E1117; }
 
 /* Remove Streamlit padding so camera can be near full screen */
 .block-container{
@@ -38,60 +39,67 @@ main > div{
   padding-right: 0 !important;
 }
 
-/* Android Chrome address bar collapses/expands: prefer dvh when supported */
+/* Prefer modern viewport units on mobile (Android Chrome supports svh/dvh) */
 :root{
   --yellow:#FFD400;
   --green:#00E676;
   --bg:#0E1117;
-  --bar: 54px;     /* top bar height */
-  --bar2: 54px;    /* bottom bar height */
+  --top: 52px;
+  --bottom: 52px;
 }
 
-@supports (height: 100dvh){
-  .camera-shell{
-    height: calc(100dvh - var(--bar) - var(--bar2));
-  }
-}
-@supports not (height: 100dvh){
-  .camera-shell{
-    height: calc(100vh - var(--bar) - var(--bar2));
-  }
-}
-
-/* Top thin bar */
+/* Top bar */
 .topbar{
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(14,17,23,0.78);
+  background: rgba(14,17,23,0.80);
   backdrop-filter: blur(10px);
   padding: 8px 12px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
-  height: var(--bar);
+  height: var(--top);
   box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.topbar .left{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
 }
 .topbar .title{
   font-size: 13px;
   font-weight: 900;
   color: #E9EEF6;
-  line-height: 1.1;
+  line-height: 1.05;
 }
 .topbar .sub{
   font-size: 11px;
-  color: rgba(233,238,246,0.70);
-  line-height: 1.2;
+  color: rgba(233,238,246,0.72);
+  line-height: 1.1;
+}
+.topbar .hint{
+  font-size: 11px;
+  color: rgba(233,238,246,0.60);
+  white-space: nowrap;
 }
 
-/* Camera shell: full width, full remaining height */
+/* Camera shell: occupy remaining height */
 .camera-shell{
   position: relative;
   width: 100vw;
   background: var(--bg);
   overflow: hidden;
+}
+
+/* height: use svh/dvh fallback chain */
+@supports (height: 100dvh){
+  .camera-shell{ height: calc(100dvh - var(--top) - var(--bottom)); }
+}
+@supports not (height: 100dvh){
+  .camera-shell{ height: calc(100svh - var(--top) - var(--bottom)); }
 }
 
 /* Make Streamlit camera component fill width */
@@ -152,28 +160,27 @@ main > div{
   right: 0;
   bottom: 0;
   z-index: 60;
-  background: rgba(14,17,23,0.82);
+  background: rgba(14,17,23,0.86);
   backdrop-filter: blur(10px);
   padding: 8px 12px;
   border-top: 1px solid rgba(255,255,255,0.06);
-  height: var(--bar2);
+  height: var(--bottom);
   box-sizing: border-box;
-  display: flex;
-  align-items: center;
+  display:flex;
+  align-items:center;
 }
 .bottombar .msg{
   font-size: 11.5px;
-  color: rgba(233,238,246,0.82);
+  color: rgba(233,238,246,0.84);
   line-height: 1.25;
 }
 
-/* Touch-friendly button */
+/* Touch-friendly Streamlit buttons */
 div.stButton > button{
   border-radius: 14px !important;
-  padding: 12px 14px !important;
+  padding: 10px 12px !important;
   font-weight: 900 !important;
-  font-size: 16px !important;
-  width: 100% !important;
+  font-size: 14px !important;
 }
 </style>
     """,
@@ -190,6 +197,8 @@ if "frame_good" not in st.session_state:
     st.session_state.frame_good = False
 if "last_msg" not in st.session_state:
     st.session_state.last_msg = "請將名片填滿框線｜Fill the frame with the card"
+if "fs_trigger" not in st.session_state:
+    st.session_state.fs_trigger = 0
 
 # ==================================================
 # Gemini
@@ -254,8 +263,11 @@ def get_oauth_creds():
     st.markdown(
         """
         <div class="topbar">
-          <div class="title">🔐 Login required｜需要登入</div>
-          <div class="sub">請先登入 Google 才能上傳 Drive / 寫入 Sheets</div>
+          <div class="left">
+            <div class="title">🔐 Login required｜需要登入</div>
+            <div class="sub">請先登入 Google 才能上傳 Drive / 寫入 Sheets</div>
+          </div>
+          <div class="hint">Android Chrome</div>
         </div>
         """,
         unsafe_allow_html=True
@@ -415,19 +427,62 @@ def save_sheet(data: dict, link: str, creds: Credentials):
     ])
 
 # ==================================================
+# Fullscreen + (try) lock landscape (best-effort)
+# ==================================================
+def request_fullscreen_and_landscape():
+    st.session_state.fs_trigger += 1
+    components.html(
+        f"""
+<script>
+(async function() {{
+  try {{
+    const el = document.documentElement;
+    if (!document.fullscreenElement) {{
+      if (el.requestFullscreen) {{
+        await el.requestFullscreen();
+      }}
+    }}
+  }} catch(e) {{}}
+
+  // Try lock landscape (works only in some Android Chrome situations)
+  try {{
+    if (screen.orientation && screen.orientation.lock) {{
+      await screen.orientation.lock('landscape');
+    }}
+  }} catch(e) {{}}
+}})();
+</script>
+        """,
+        height=0,
+        width=0,
+    )
+
+# ==================================================
 # UI
 # ==================================================
 creds = get_oauth_creds()
 
+# Top bar with fullscreen button
 st.markdown(
     """
     <div class="topbar">
-      <div class="title">📇 名片掃描｜Card Scanner</div>
-      <div class="sub">把名片放滿框線後拍照｜Fill the frame then capture</div>
+      <div class="left">
+        <div class="title">📇 名片掃描｜Card Scanner</div>
+        <div class="sub">建議：點「全螢幕」再把手機橫放｜Tap Fullscreen then rotate</div>
+      </div>
+      <div class="hint">Android Chrome</div>
     </div>
     """,
     unsafe_allow_html=True
 )
+
+col_a, col_b = st.columns([1, 1])
+with col_a:
+    if st.button("⛶ Fullscreen｜全螢幕", use_container_width=True):
+        request_fullscreen_and_landscape()
+with col_b:
+    if st.button("↻ Rotate phone｜請橫放", use_container_width=True):
+        request_fullscreen_and_landscape()
 
 st.markdown('<div class="camera-shell">', unsafe_allow_html=True)
 
@@ -437,7 +492,7 @@ frame_class = "guide good" if st.session_state.frame_good else "guide"
 st.markdown(
     f"""
     <div class="{frame_class}"></div>
-    <div class="guide-text">請把名片放滿框線<br/>Fill the frame</div>
+    <div class="guide-text">讓名片盡量填滿框線｜Fill the frame</div>
     </div>
     """,
     unsafe_allow_html=True
