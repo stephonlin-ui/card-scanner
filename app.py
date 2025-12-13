@@ -30,13 +30,13 @@ st.markdown(
     #MainMenu, footer, header {visibility:hidden;}
 
     .block-container{
-      padding: 0 !important;
-      max-width: 100vw !important;
+      padding:0 !important;
+      max-width:100vw !important;
     }
 
     main > div{
-      padding-left: 0 !important;
-      padding-right: 0 !important;
+      padding-left:0 !important;
+      padding-right:0 !important;
     }
 
     .topbar{
@@ -52,11 +52,6 @@ st.markdown(
       font-size:12px;
       color:#B0B7C3;
       margin-top:2px;
-    }
-
-    .camera-wrap{
-      width:100vw;
-      background:#000;
     }
 
     .camera-wrap video,
@@ -79,10 +74,6 @@ st.markdown(
       pointer-events:none;
     }
 
-    .bottombar{
-      padding:10px;
-    }
-
     .stButton > button{
       width:100%;
       padding:14px;
@@ -99,26 +90,30 @@ st.markdown(
 # Secrets & API
 # =========================
 if "GEMINI_API_KEY" not in st.secrets:
+    st.error("❌ 未設定 GEMINI_API_KEY")
+    st.stop()
+
+if "gcp_service_account" not in st.secrets:
+    st.error("❌ 未設定 Google Service Account")
     st.stop()
 
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 def get_creds():
-    creds_dict = dict(st.secrets["gcp_service_account"])
-    if "\\n" in creds_dict["private_key"]:
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+    info = dict(st.secrets["gcp_service_account"])
+    if "\\n" in info["private_key"]:
+        info["private_key"] = info["private_key"].replace("\\n", "\n")
 
     scopes = [
         "https://www.googleapis.com/auth/drive",
         "https://www.googleapis.com/auth/spreadsheets"
     ]
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    return creds
+    return Credentials.from_service_account_info(info, scopes=scopes)
 
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "").strip()
 
 # =========================
-# OpenCV crop (穩定版)
+# OpenCV 自動裁切（穩定版）
 # =========================
 def auto_crop_card(pil_img):
     img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
@@ -141,14 +136,12 @@ def auto_crop_card(pil_img):
             if area / img_area < 0.2:
                 continue
 
-            pts = approx.reshape(4,2)
-            rect = cv2.minAreaRect(pts)
+            rect = cv2.minAreaRect(approx)
             box = cv2.boxPoints(rect)
             box = np.int0(box)
 
             width = int(rect[1][0])
             height = int(rect[1][1])
-
             if width < height:
                 width, height = height, width
 
@@ -159,8 +152,7 @@ def auto_crop_card(pil_img):
                 [0,height-1]
             ], dtype="float32")
 
-            src = np.array(box, dtype="float32")
-            M = cv2.getPerspectiveTransform(src, dst)
+            M = cv2.getPerspectiveTransform(np.array(box, dtype="float32"), dst)
             warp = cv2.warpPerspective(img, M, (width, height))
             return Image.fromarray(cv2.cvtColor(warp, cv2.COLOR_BGR2RGB))
 
@@ -172,7 +164,7 @@ def auto_crop_card(pil_img):
 def extract_info(pil_img):
     model = genai.GenerativeModel("models/gemini-2.5-flash")
     prompt = """
-    請從名片圖片中擷取資訊，輸出 JSON：
+    請從名片圖片中擷取資訊，只輸出 JSON：
     {
       "name":"",
       "title":"",
@@ -183,19 +175,17 @@ def extract_info(pil_img):
       "address":"",
       "website":""
     }
-    只輸出 JSON
     """
     res = model.generate_content([prompt, pil_img])
-    txt = res.text.strip()
+    text = res.text.strip()
 
-    if txt.startswith("```"):
-        txt = txt.strip("`")
-        txt = txt.replace("json", "").strip()
+    if text.startswith("```"):
+        text = text.strip("`").replace("json","").strip()
 
-    return json.loads(txt)
+    return json.loads(text)
 
 # =========================
-# Drive upload
+# Google Drive
 # =========================
 def upload_drive(img_bytes, filename):
     creds = get_creds()
@@ -205,17 +195,17 @@ def upload_drive(img_bytes, filename):
     file = service.files().create(
         body={"name": filename, "parents":[DRIVE_FOLDER_ID]},
         media_body=media,
-        fields="id,webViewLink",
+        fields="webViewLink",
         supportsAllDrives=True
     ).execute()
+
     return file["webViewLink"]
 
 # =========================
-# Sheet write
+# Google Sheets
 # =========================
 def write_sheet(data, link):
-    creds = get_creds()
-    client = gspread.authorize(creds)
+    client = gspread.authorize(get_creds())
 
     try:
         sh = client.open("Business_Cards_Data")
@@ -223,7 +213,8 @@ def write_sheet(data, link):
         sh = client.create("Business_Cards_Data")
 
     ws = sh.sheet1
-    if ws.row_count == 0:
+
+    if ws.row_count < 1:
         ws.append_row([
             "時間","姓名","職稱","公司","電話","傳真",
             "Email","地址","網址","照片連結"
@@ -252,22 +243,23 @@ st.markdown(
 
 cam = st.camera_input(
     " ",
-    label_visibility="collapsed",
-    facing_mode="environment"
+    label_visibility="collapsed"
 )
 
 if cam:
-    raw_img = Image.open(cam)
-    time.sleep(0.6)
+    raw = Image.open(cam)
+
+    time.sleep(0.6)  # 等待系統自動對焦穩定
 
     with st.spinner("🧠 辨識中..."):
-        cropped = auto_crop_card(raw_img)
+        cropped = auto_crop_card(raw)
         info = extract_info(cropped)
 
         buf = BytesIO()
         cropped.save(buf, format="JPEG")
+
         link = upload_drive(buf.getvalue(), f"card_{int(time.time())}.jpg")
         write_sheet(info, link)
 
-    st.success("✅ 完成")
+    st.success("✅ 建檔完成")
     st.image(cropped, use_column_width=True)
