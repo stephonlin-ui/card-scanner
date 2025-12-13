@@ -16,160 +16,174 @@ import cv2
 import numpy as np
 
 # ==================================================
-# Android Chrome: camera-first UI
+# Android Chrome: camera-first UI (FULL FILE)
 # ==================================================
 st.set_page_config(page_title="Card Scanner", page_icon="📇", layout="wide")
 
-st.markdown("""
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<style>
-#MainMenu, footer, header {visibility:hidden;}
+# IMPORTANT: CSS MUST be inside <style> and unsafe_allow_html=True,
+# otherwise it will show as plain text on the page.
+st.markdown(
+    """
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <style>
+    #MainMenu, footer, header {visibility:hidden;}
 
-/* Android Chrome：去掉 Streamlit 預設 padding，讓相機最大 */
-.block-container{
-  padding: 0 !important;
-  max-width: 100vw !important;
-}
-main > div{
-  padding-left: 0 !important;
-  padding-right: 0 !important;
-}
+    /* Remove Streamlit padding so camera can be near full screen */
+    .block-container{
+      padding: 0 !important;
+      max-width: 100vw !important;
+    }
+    main > div{
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+    }
 
-/* Android Chrome 的網址列會動態收合，建議用 100dvh（新 Chrome 支援）
-   回退：100vh */
-:root{
-  --yellow:#FFD400;
-  --green:#00E676;
-  --bg:#0E1117;
-  --bar: 54px;
-  --bar2: 54px;
-}
-@supports (height: 100dvh){
-  .camera-shell{
-    height: calc(100dvh - var(--bar) - var(--bar2));
-  }
-}
-@supports not (height: 100dvh){
-  .camera-shell{
-    height: calc(100vh - var(--bar) - var(--bar2));
-  }
-}
+    /* Android Chrome address bar collapses/expands: prefer dvh when supported */
+    :root{
+      --yellow:#FFD400;
+      --green:#00E676;
+      --bg:#0E1117;
+      --bar: 54px;     /* top bar height */
+      --bar2: 54px;    /* bottom bar height */
+    }
 
-/* 上方提示列：更薄 */
-.topbar{
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  background: rgba(14,17,23,0.78);
-  backdrop-filter: blur(10px);
-  padding: 8px 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  height: var(--bar);
-  box-sizing: border-box;
-}
-.topbar .title{
-  font-size: 13px;
-  font-weight: 900;
-  color: #E9EEF6;
-  line-height: 1.1;
-}
-.topbar .sub{
-  font-size: 11px;
-  color: rgba(233,238,246,0.70);
-  margin-top: 2px;
-  line-height: 1.2;
-}
+    @supports (height: 100dvh){
+      .camera-shell{
+        height: calc(100dvh - var(--bar) - var(--bar2));
+      }
+    }
+    @supports not (height: 100dvh){
+      .camera-shell{
+        height: calc(100vh - var(--bar) - var(--bar2));
+      }
+    }
 
-/* 相機主區塊：滿版 */
-.camera-shell{
-  position: relative;
-  width: 100vw;
-  background: var(--bg);
-  overflow: hidden;
-}
+    /* Top thin bar */
+    .topbar{
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: rgba(14,17,23,0.78);
+      backdrop-filter: blur(10px);
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      height: var(--bar);
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 2px;
+    }
+    .topbar .title{
+      font-size: 13px;
+      font-weight: 900;
+      color: #E9EEF6;
+      line-height: 1.1;
+    }
+    .topbar .sub{
+      font-size: 11px;
+      color: rgba(233,238,246,0.70);
+      line-height: 1.2;
+    }
 
-/* Streamlit camera 元件撐滿 */
-.camera-shell [data-testid="stCameraInput"]{
-  width: 100% !important;
-  max-width: 100% !important;
-  margin: 0 !important;
-}
+    /* Camera shell: full width, full remaining height */
+    .camera-shell{
+      position: relative;
+      width: 100vw;
+      background: var(--bg);
+      overflow: hidden;
+    }
 
-/* Android Chrome 可能用 video/img/canvas 包：都拉滿寬 */
-.camera-shell video,
-.camera-shell img,
-.camera-shell canvas{
-  width: 100% !important;
-  height: auto !important;
-  border-radius: 0 !important;
-}
+    /* Make Streamlit camera component fill width */
+    .camera-shell [data-testid="stCameraInput"]{
+      width: 100% !important;
+      max-width: 100% !important;
+      margin: 0 !important;
+    }
 
-/* 引導框：Android 直向最舒服的位置（略偏上讓底部按鍵不擋） */
-.guide{
-  position:absolute;
-  top: 18%;
-  left: 5%;
-  width: 90%;
-  height: 46%;
-  border: 4px dashed var(--yellow);
-  border-radius: 18px;
-  box-shadow: 0 0 0 2000px rgba(0,0,0,0.25);
-  pointer-events:none;
-  transition: border-color 0.35s ease, transform 0.35s ease;
-}
-.guide.good{
-  border-color: var(--green);
-  animation: pop 0.55s ease;
-}
-@keyframes pop{
-  0% {transform: scale(0.985);}
-  60%{transform: scale(1.02);}
-  100%{transform: scale(1.0);}
-}
-.guide-text{
-  position:absolute;
-  top: 8%;
-  width: 100%;
-  text-align:center;
-  font-weight: 900;
-  font-size: 13px;
-  color: #fff;
-  pointer-events:none;
-  text-shadow: 0 2px 10px rgba(0,0,0,0.55);
-  line-height: 1.2;
-}
+    /* Ensure preview fills width */
+    .camera-shell video,
+    .camera-shell img,
+    .camera-shell canvas{
+      width: 100% !important;
+      height: auto !important;
+      border-radius: 0 !important;
+    }
 
-/* 底部狀態列：薄、固定、不擋相機主畫面 */
-.bottombar{
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 60;
-  background: rgba(14,17,23,0.82);
-  backdrop-filter: blur(10px);
-  padding: 8px 12px;
-  border-top: 1px solid rgba(255,255,255,0.06);
-  height: var(--bar2);
-  box-sizing: border-box;
-}
-.bottombar .msg{
-  font-size: 11.5px;
-  color: rgba(233,238,246,0.82);
-  line-height: 1.25;
-}
+    /* Guide box */
+    .guide{
+      position:absolute;
+      top: 18%;
+      left: 5%;
+      width: 90%;
+      height: 46%;
+      border: 4px dashed var(--yellow);
+      border-radius: 18px;
+      box-shadow: 0 0 0 2000px rgba(0,0,0,0.25);
+      pointer-events:none;
+      transition: border-color 0.35s ease, transform 0.35s ease;
+    }
+    .guide.good{
+      border-color: var(--green);
+      animation: pop 0.55s ease;
+    }
+    @keyframes pop{
+      0% {transform: scale(0.985);}
+      60%{transform: scale(1.02);}
+      100%{transform: scale(1.0);}
+    }
 
-/* 觸控按鈕：大、滿寬（主要用在重拍） */
-div.stButton > button{
-  border-radius: 14px !important;
-  padding: 12px 14px !important;
-  font-weight: 900 !important;
-  font-size: 16px !important;
-  width: 100% !important;
-}
-</style>
-""", unsafe_allow_html=True)
+    .guide-text{
+      position:absolute;
+      top: 8%;
+      width: 100%;
+      text-align:center;
+      font-weight: 900;
+      font-size: 13px;
+      color: #fff;
+      pointer-events:none;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.55);
+      line-height: 1.2;
+    }
 
+    /* Bottom thin status bar */
+    .bottombar{
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 60;
+      background: rgba(14,17,23,0.82);
+      backdrop-filter: blur(10px);
+      padding: 8px 12px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      height: var(--bar2);
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+    }
+    .bottombar .msg{
+      font-size: 11.5px;
+      color: rgba(233,238,246,0.82);
+      line-height: 1.25;
+    }
+
+    /* Touch-friendly button */
+    div.stButton > button{
+      border-radius: 14px !important;
+      padding: 12px 14px !important;
+      font-weight: 900 !important;
+      font-size: 16px !important;
+      width: 100% !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# ==================================================
+# Session State
+# ==================================================
 if "camera_key" not in st.session_state:
     st.session_state.camera_key = 0
 if "frame_good" not in st.session_state:
@@ -208,6 +222,7 @@ CLIENT_CONFIG = {
 }
 
 def get_oauth_creds():
+    # 1) already have session creds
     if "credentials" in st.session_state:
         creds = Credentials.from_authorized_user_info(
             json.loads(st.session_state["credentials"]), SCOPES
@@ -217,6 +232,7 @@ def get_oauth_creds():
             st.session_state["credentials"] = creds.to_json()
         return creds
 
+    # 2) callback with ?code=
     params = st.experimental_get_query_params()
     if "code" in params:
         flow = Flow.from_client_config(
@@ -230,6 +246,7 @@ def get_oauth_creds():
         st.experimental_set_query_params()
         return creds
 
+    # 3) show login link
     flow = Flow.from_client_config(
         CLIENT_CONFIG,
         scopes=SCOPES,
@@ -237,12 +254,15 @@ def get_oauth_creds():
     )
     auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
 
-    st.markdown(f"""
-    <div class="topbar">
-      <div class="title">🔐 Login required｜需要登入</div>
-      <div class="sub">請先登入 Google 才能上傳 Drive / 寫入 Sheets</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="topbar">
+          <div class="title">🔐 Login required｜需要登入</div>
+          <div class="sub">請先登入 Google 才能上傳 Drive / 寫入 Sheets</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
     st.markdown(f"[👉 Login with Google｜使用 Google 登入]({auth_url})")
     st.stop()
 
@@ -402,28 +422,38 @@ def save_sheet(data: dict, link: str, creds: Credentials):
 # ==================================================
 creds = get_oauth_creds()
 
-st.markdown("""
-<div class="topbar">
-  <div class="title">📇 名片掃描｜Card Scanner</div>
-  <div class="sub">把名片放滿框線後拍照｜Fill the frame then capture</div>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    """
+    <div class="topbar">
+      <div class="title">📇 名片掃描｜Card Scanner</div>
+      <div class="sub">把名片放滿框線後拍照｜Fill the frame then capture</div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 st.markdown('<div class="camera-shell">', unsafe_allow_html=True)
+
 img = st.camera_input(" ", key=f"cam_{st.session_state.camera_key}", label_visibility="collapsed")
 
 frame_class = "guide good" if st.session_state.frame_good else "guide"
-st.markdown(f"""
-<div class="{frame_class}"></div>
-<div class="guide-text">請把名片放滿框線<br/>Fill the frame</div>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    f"""
+    <div class="{frame_class}"></div>
+    <div class="guide-text">請把名片放滿框線<br/>Fill the frame</div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
-st.markdown(f"""
-<div class="bottombar">
-  <div class="msg">{st.session_state.last_msg}</div>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    f"""
+    <div class="bottombar">
+      <div class="msg">{st.session_state.last_msg}</div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 # ==================================================
 # Auto pipeline on capture
