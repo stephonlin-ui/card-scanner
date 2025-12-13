@@ -6,6 +6,8 @@ gspread
 oauth2client
 google-api-python-client
 
-# --- 新增（名片裁切 / 斜拍校正 必要） ---
+# ✅ 新增（OAuth + 影像裁切/校正）
+google-auth
+google-auth-oauthlib
 numpy
 opencv-python-headless
