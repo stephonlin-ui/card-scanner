@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import google.generativeai as genai
 import gspread
 from google_auth_oauthlib.flow import Flow
@@ -20,165 +21,164 @@ import numpy as np
 # ==================================================
 st.set_page_config(page_title="Card Scanner", page_icon="📇", layout="wide")
 
-# IMPORTANT: CSS MUST be inside <style> and unsafe_allow_html=True,
-# otherwise it will show as plain text on the page.
-st.markdown(
+# ✅ Use components.html to inject CSS (prevents CSS showing as text)
+components.html(
     """
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <style>
-    #MainMenu, footer, header {visibility:hidden;}
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+#MainMenu, footer, header {visibility:hidden;}
 
-    /* Remove Streamlit padding so camera can be near full screen */
-    .block-container{
-      padding: 0 !important;
-      max-width: 100vw !important;
-    }
-    main > div{
-      padding-left: 0 !important;
-      padding-right: 0 !important;
-    }
+/* Remove Streamlit padding so camera can be near full screen */
+.block-container{
+  padding: 0 !important;
+  max-width: 100vw !important;
+}
+main > div{
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
 
-    /* Android Chrome address bar collapses/expands: prefer dvh when supported */
-    :root{
-      --yellow:#FFD400;
-      --green:#00E676;
-      --bg:#0E1117;
-      --bar: 54px;     /* top bar height */
-      --bar2: 54px;    /* bottom bar height */
-    }
+/* Android Chrome address bar collapses/expands: prefer dvh when supported */
+:root{
+  --yellow:#FFD400;
+  --green:#00E676;
+  --bg:#0E1117;
+  --bar: 54px;     /* top bar height */
+  --bar2: 54px;    /* bottom bar height */
+}
 
-    @supports (height: 100dvh){
-      .camera-shell{
-        height: calc(100dvh - var(--bar) - var(--bar2));
-      }
-    }
-    @supports not (height: 100dvh){
-      .camera-shell{
-        height: calc(100vh - var(--bar) - var(--bar2));
-      }
-    }
+@supports (height: 100dvh){
+  .camera-shell{
+    height: calc(100dvh - var(--bar) - var(--bar2));
+  }
+}
+@supports not (height: 100dvh){
+  .camera-shell{
+    height: calc(100vh - var(--bar) - var(--bar2));
+  }
+}
 
-    /* Top thin bar */
-    .topbar{
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      background: rgba(14,17,23,0.78);
-      backdrop-filter: blur(10px);
-      padding: 8px 12px;
-      border-bottom: 1px solid rgba(255,255,255,0.06);
-      height: var(--bar);
-      box-sizing: border-box;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      gap: 2px;
-    }
-    .topbar .title{
-      font-size: 13px;
-      font-weight: 900;
-      color: #E9EEF6;
-      line-height: 1.1;
-    }
-    .topbar .sub{
-      font-size: 11px;
-      color: rgba(233,238,246,0.70);
-      line-height: 1.2;
-    }
+/* Top thin bar */
+.topbar{
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(14,17,23,0.78);
+  backdrop-filter: blur(10px);
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  height: var(--bar);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+.topbar .title{
+  font-size: 13px;
+  font-weight: 900;
+  color: #E9EEF6;
+  line-height: 1.1;
+}
+.topbar .sub{
+  font-size: 11px;
+  color: rgba(233,238,246,0.70);
+  line-height: 1.2;
+}
 
-    /* Camera shell: full width, full remaining height */
-    .camera-shell{
-      position: relative;
-      width: 100vw;
-      background: var(--bg);
-      overflow: hidden;
-    }
+/* Camera shell: full width, full remaining height */
+.camera-shell{
+  position: relative;
+  width: 100vw;
+  background: var(--bg);
+  overflow: hidden;
+}
 
-    /* Make Streamlit camera component fill width */
-    .camera-shell [data-testid="stCameraInput"]{
-      width: 100% !important;
-      max-width: 100% !important;
-      margin: 0 !important;
-    }
+/* Make Streamlit camera component fill width */
+.camera-shell [data-testid="stCameraInput"]{
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+}
 
-    /* Ensure preview fills width */
-    .camera-shell video,
-    .camera-shell img,
-    .camera-shell canvas{
-      width: 100% !important;
-      height: auto !important;
-      border-radius: 0 !important;
-    }
+/* Ensure preview fills width */
+.camera-shell video,
+.camera-shell img,
+.camera-shell canvas{
+  width: 100% !important;
+  height: auto !important;
+  border-radius: 0 !important;
+}
 
-    /* Guide box */
-    .guide{
-      position:absolute;
-      top: 18%;
-      left: 5%;
-      width: 90%;
-      height: 46%;
-      border: 4px dashed var(--yellow);
-      border-radius: 18px;
-      box-shadow: 0 0 0 2000px rgba(0,0,0,0.25);
-      pointer-events:none;
-      transition: border-color 0.35s ease, transform 0.35s ease;
-    }
-    .guide.good{
-      border-color: var(--green);
-      animation: pop 0.55s ease;
-    }
-    @keyframes pop{
-      0% {transform: scale(0.985);}
-      60%{transform: scale(1.02);}
-      100%{transform: scale(1.0);}
-    }
+/* Guide box */
+.guide{
+  position:absolute;
+  top: 18%;
+  left: 5%;
+  width: 90%;
+  height: 46%;
+  border: 4px dashed var(--yellow);
+  border-radius: 18px;
+  box-shadow: 0 0 0 2000px rgba(0,0,0,0.25);
+  pointer-events:none;
+  transition: border-color 0.35s ease, transform 0.35s ease;
+}
+.guide.good{
+  border-color: var(--green);
+  animation: pop 0.55s ease;
+}
+@keyframes pop{
+  0% {transform: scale(0.985);}
+  60%{transform: scale(1.02);}
+  100%{transform: scale(1.0);}
+}
+.guide-text{
+  position:absolute;
+  top: 8%;
+  width: 100%;
+  text-align:center;
+  font-weight: 900;
+  font-size: 13px;
+  color: #fff;
+  pointer-events:none;
+  text-shadow: 0 2px 10px rgba(0,0,0,0.55);
+  line-height: 1.2;
+}
 
-    .guide-text{
-      position:absolute;
-      top: 8%;
-      width: 100%;
-      text-align:center;
-      font-weight: 900;
-      font-size: 13px;
-      color: #fff;
-      pointer-events:none;
-      text-shadow: 0 2px 10px rgba(0,0,0,0.55);
-      line-height: 1.2;
-    }
+/* Bottom thin status bar */
+.bottombar{
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  background: rgba(14,17,23,0.82);
+  backdrop-filter: blur(10px);
+  padding: 8px 12px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  height: var(--bar2);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+}
+.bottombar .msg{
+  font-size: 11.5px;
+  color: rgba(233,238,246,0.82);
+  line-height: 1.25;
+}
 
-    /* Bottom thin status bar */
-    .bottombar{
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      z-index: 60;
-      background: rgba(14,17,23,0.82);
-      backdrop-filter: blur(10px);
-      padding: 8px 12px;
-      border-top: 1px solid rgba(255,255,255,0.06);
-      height: var(--bar2);
-      box-sizing: border-box;
-      display: flex;
-      align-items: center;
-    }
-    .bottombar .msg{
-      font-size: 11.5px;
-      color: rgba(233,238,246,0.82);
-      line-height: 1.25;
-    }
-
-    /* Touch-friendly button */
-    div.stButton > button{
-      border-radius: 14px !important;
-      padding: 12px 14px !important;
-      font-weight: 900 !important;
-      font-size: 16px !important;
-      width: 100% !important;
-    }
-    </style>
+/* Touch-friendly button */
+div.stButton > button{
+  border-radius: 14px !important;
+  padding: 12px 14px !important;
+  font-weight: 900 !important;
+  font-size: 16px !important;
+  width: 100% !important;
+}
+</style>
     """,
-    unsafe_allow_html=True
+    height=0,
+    width=0,
 )
 
 # ==================================================
@@ -222,7 +222,6 @@ CLIENT_CONFIG = {
 }
 
 def get_oauth_creds():
-    # 1) already have session creds
     if "credentials" in st.session_state:
         creds = Credentials.from_authorized_user_info(
             json.loads(st.session_state["credentials"]), SCOPES
@@ -232,7 +231,6 @@ def get_oauth_creds():
             st.session_state["credentials"] = creds.to_json()
         return creds
 
-    # 2) callback with ?code=
     params = st.experimental_get_query_params()
     if "code" in params:
         flow = Flow.from_client_config(
@@ -246,7 +244,6 @@ def get_oauth_creds():
         st.experimental_set_query_params()
         return creds
 
-    # 3) show login link
     flow = Flow.from_client_config(
         CLIENT_CONFIG,
         scopes=SCOPES,
